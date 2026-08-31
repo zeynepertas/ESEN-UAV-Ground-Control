@@ -1,0 +1,218 @@
+<div class="dashboard-header">
+  ESEN YER KONTROL İSTASYONU (GCS)
+  <div style="font-size: 12px; color: #8c93a8; font-weight: normal; margin-top: 5px; letter-spacing: 5px;">MERKEZİ UÇUŞ VE KOMUTA SİSTEMİ</div>
+</div>
+
+<div class="dashboard-grid">
+  
+  <!-- Sol Panel: Telemetri ve Alarmlar -->
+  <div class="panel telemetry-panel">
+    <h3 class="panel-title">SİSTEM TELEMETRİSİ</h3>
+    
+    <div class="stat-box">
+      <div class="stat-label">Uçuş Modu</div>
+      <div class="stat-value text-yellow" style="font-size: 18px;">[{{ durum() }}]</div>
+    </div>
+    
+    <div class="stat-box">
+      <div class="stat-label">İrtifa (AMSL)</div>
+      <div class="stat-value text-blue">{{ irtifa() }} m</div>
+    </div>
+    
+    <div class="stat-box">
+      <div class="stat-label">Hız</div>
+      <div class="stat-value text-red">{{ hiz() }} km/s</div>
+    </div>
+    
+    <div class="stat-box">
+      <div class="stat-label">Enlem</div>
+      <div class="stat-value text-green">{{ enlem() }}</div>
+    </div>
+    
+    <div class="stat-box">
+      <div class="stat-label">Boylam</div>
+      <div class="stat-value text-green">{{ boylam() }}</div>
+    </div>
+
+    <div class="stat-box">
+      <div class="stat-label">Sıcaklık</div>
+      <div class="stat-value text-yellow" style="font-size: 18px;">{{ sicaklik() }} °C</div>
+    </div>
+    
+    <div class="stat-box">
+      <div class="stat-label">İvme (X/Y/Z)</div>
+      <div class="stat-value text-blue" style="font-size: 14px;">{{ ax() }} / {{ ay() }} / {{ az() }}</div>
+    </div>
+
+    <div class="stat-box">
+      <div class="stat-label">Jiroskop (X/Y/Z)</div>
+      <div class="stat-value text-green" style="font-size: 14px;">{{ gx() }} / {{ gy() }} / {{ gz() }}</div>
+    </div>
+
+    <div class="stat-box">
+      <div class="stat-label">Uçuş Açıları (Roll/Pitch)</div>
+      <div class="stat-value text-yellow" style="font-size: 14px;">{{ roll() }}° / {{ pitch() }}°</div>
+    </div>
+
+    <!-- Alarmlar -->
+    @if (gpsKoptu()) {
+      <div class="alert-danger">
+        SİSTEM UYARISI: GPS SİNYALİ KAYIP!
+      </div>
+    }
+
+    @if (sinirIhlali()) {
+      <div class="alert-warning">
+        DİKKAT: GÜVENLİ BÖLGE İHLALİ!
+      </div>
+    }
+
+    @if (carpmaRiski()) {
+      <div class="alert-danger" style="animation: pulse-red 0.5s infinite; background-color: rgba(214, 48, 49, 0.4);">
+        KRİTİK: ARAZİ ÇARPIŞMA RİSKİ!<br><small>OTOPİLOT MÜDAHALESİ: TIRMANIŞ</small>
+      </div>
+    }
+  </div>
+
+<!-- Orta Kolon: Suni Ufuk ve Komuta Kontrol -->
+  <div style="display: flex; flex-direction: column; gap: 24px; height: 100%;">
+    <!-- SUNİ UFUK GÖSTERGESİ PANELİ -->
+    <div class="panel" style="display: flex; justify-content: center; align-items: center; flex-grow: 0;">
+      <div class="artificial-horizon-container">
+        <h3 class="panel-title" style="margin-bottom: 25px; text-align: center;">DURUM GÖSTERGESİ</h3>
+        
+        <div class="artificial-horizon">
+          <!-- Arka Plan (Ufuk Çizgisi) Roll ile döner, Pitch ile aşağı/yukarı kayar -->
+        <div class="horizon-background" [style.transform]="'rotate(' + roll() + 'deg) translateY(' + pitch() * 2 + 'px)'">
+          <div class="sky"></div>
+          <div class="ground"></div>
+          
+          <!-- Pitch Ladder (Yunuslama Ölçeği) -->
+          <div class="pitch-ladder">
+            <div class="pitch-line" style="top: calc(50% - 60px);"><span>30</span></div>
+            <div class="pitch-line" style="top: calc(50% - 40px); width: 30px;"><span>20</span></div>
+            <div class="pitch-line" style="top: calc(50% - 20px);"><span>10</span></div>
+            
+            <div class="horizon-line"></div>
+            
+            <div class="pitch-line" style="top: calc(50% + 20px);"><span>10</span></div>
+            <div class="pitch-line" style="top: calc(50% + 40px); width: 30px;"><span>20</span></div>
+            <div class="pitch-line" style="top: calc(50% + 60px);"><span>30</span></div>
+          </div>
+        </div>
+        
+        <!-- Merkezdeki Sabit Uçak/İHA Simgesi (Daha profesyonel HUD tasarımı) -->
+        <div class="drone-crosshair">
+          <div class="wing left-wing"></div>
+          <div class="center-dot"></div>
+          <div class="wing right-wing"></div>
+        </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sağ Panel: Komuta Kontrol ve Joystick (Şimdi Ufuk Göstergesinin Altında) -->
+    <div class="panel control-panel">
+      <div>
+        <h3 class="panel-title">OTONOM GÖREV KONTROLÜ</h3>
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+          <button class="btn btn-primary" (click)="eveDon()">
+             Eve Dönüş (RTL)
+          </button>
+          <button class="btn btn-success" (click)="guvenliInis()">
+             Dikey İniş (LAND)
+          </button>
+          <button class="btn btn-danger" (click)="acilDurdur()">
+             Acil Motor Durdurma
+          </button>
+        </div>
+      </div>
+
+      <div style="margin-top: 10px;">
+        <h3 class="panel-title">MANUEL UÇUŞ KONTROLÜ</h3>
+        <button class="btn btn-info" (click)="havalan()">
+          Otomatik Kalkış / Devriye
+        </button>
+
+        <div class="joystick-grid">
+          <div></div>
+          <button class="joy-btn" (click)="gitKuzey()" title="Kuzey">K</button>
+          <div></div>
+          <button class="joy-btn" (click)="gitBati()" title="Batı">B</button>
+          <button class="joy-btn" (click)="gitGuney()" title="Güney">G</button>
+          <button class="joy-btn" (click)="gitDogu()" title="Doğu">D</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sağ Kolon (En Geniş Alan): Harita -->
+  <div class="panel map-panel">
+    <div id="map"></div>
+  </div>
+</div>
+
+<!-- Alt Panel: Uçuş Karakutusu -->
+<div class="panel history-panel">
+  <div class="history-header">
+    <h3 class="panel-title" style="margin: 0; border: none; padding: 0;">UÇUŞ VERİ KAYITLARI (KARAKUTU)</h3>
+    <div class="live-badge">CANLI AKTARIM</div>
+  </div>
+
+  @if (gecmisVeriler().length === 0) {
+    <p style="text-align: center; color: #8c93a8; padding: 20px;">Bağlantı bekleniyor...</p>
+  } @else {
+    <div class="table-wrapper">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Zaman (UTC)</th>
+            <th>Mod</th>
+            <th>İrtifa (m)</th>
+            <th>Hız (km/s)</th>
+            <th>Enlem</th>
+            <th>Boylam</th>
+            <th>Sıcaklık (°C)</th>
+            <th>İvme X</th>
+            <th>İvme Y</th>
+            <th>İvme Z</th>
+            <th>Jiro X</th>
+            <th>Jiro Y</th>
+            <th>Jiro Z</th>
+            <th>Yatış (Roll)</th>
+            <th>Yunuslama (Pitch)</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (kayit of gecmisVeriler(); track kayit.id) {
+            <tr>
+              <td style="color: #8c93a8;">#{{ kayit.id }}</td>
+              <td>{{ kayit.zaman }}</td>
+              <td class="text-yellow" style="font-weight: bold;">{{ kayit.durum }}</td>
+              <td class="text-blue">{{ kayit.irtifa }}</td>
+              <td class="text-red">{{ kayit.hiz }}</td>
+              <td class="text-green">{{ kayit.enlem }}</td>
+              <td class="text-green">{{ kayit.boylam }}</td>
+              <td class="text-yellow">{{ kayit.sicaklik }}</td>
+              <td class="text-blue">{{ kayit.ax }}</td>
+              <td class="text-blue">{{ kayit.ay }}</td>
+              <td class="text-blue">{{ kayit.az }}</td>
+              <td class="text-green">{{ kayit.gx }}</td>
+              <td class="text-green">{{ kayit.gy }}</td>
+              <td class="text-green">{{ kayit.gz }}</td>
+              <td class="text-yellow">{{ kayit.roll }}</td>
+              <td class="text-yellow">{{ kayit.pitch }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <div style="text-align: center; margin-top: 15px; margin-bottom: 5px;">
+      <button class="btn btn-info" (click)="dahaFazlaYukle()" style="width: auto; padding: 5px 15px; font-size: 12px;">
+        Daha Fazla Kayıt Yükle...
+      </button>
+    </div>
+  }
+</div>
