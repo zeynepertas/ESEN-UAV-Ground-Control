@@ -1,3 +1,10 @@
+<!-- BAĞLANTI KOPTU UYARISI (En üstte, bağımsız duracak) -->
+@if (baglantiKoptu()) {
+  <div style="background-color: #ff4c4c; color: white; text-align: center; padding: 15px; font-weight: bold; border-radius: 5px; margin-bottom: 15px; font-size: 18px; box-shadow: 0 0 15px rgba(255, 76, 76, 0.5);">
+    ⚠️ KRİTİK UYARI: TELEMETRİ BAĞLANTISI KOPTU! SİNYAL ARANIYOR... ⚠️
+  </div>
+}
+
 <div class="dashboard-header">
   ESEN YER KONTROL İSTASYONU (GCS)
   <div style="font-size: 12px; color: #8c93a8; font-weight: normal; margin-top: 5px; letter-spacing: 5px;">MERKEZİ UÇUŞ VE KOMUTA SİSTEMİ</div>
@@ -50,12 +57,20 @@
     </div>
 
     <div class="stat-box">
-      <div class="stat-label">Uçuş Açıları (Roll/Pitch)</div>
-      <div class="stat-value text-yellow" style="font-size: 14px;">{{ roll() }}° / {{ pitch() }}°</div>
+      <div class="stat-label">Uçuş Açıları (Roll/Pitch/Yaw)</div>
+      <div class="stat-value text-yellow" style="font-size: 14px;">{{ roll() }}° / {{ pitch() }}° / {{ yaw() }}°</div>
     </div>
 
+
+
     <!-- Alarmlar -->
-    @if (gpsKoptu()) {
+    @if (baglantiKoptu()) {
+      <div class="alert-danger" style="animation: pulse-red 0.5s infinite; background-color: rgba(214, 48, 49, 0.6); color: white; border: 2px solid red; font-weight: bold;">
+        <i class="fas fa-exclamation-triangle"></i> KRİTİK: ESP32 BAĞLANTISI KOPTU!
+      </div>
+    }
+
+    @if (gpsKoptu() && !baglantiKoptu()) {
       <div class="alert-danger">
         SİSTEM UYARISI: GPS SİNYALİ KAYIP!
       </div>
@@ -144,7 +159,17 @@
         </div>
       </div>
     </div>
+
+    <!-- Alt Kısım: Zaman Damgası (Boşluğa tam oturacak şık tasarım) -->
+      <div style="margin-top: 20px; padding: 15px; border-radius: 8px; border: 1px dashed #00ffcc; background-color: rgba(0, 255, 204, 0.05); text-align: center;">
+        <div style="font-size: 11px; color: #00ffcc; margin-bottom: 5px; font-weight: bold; letter-spacing: 2px;">⏱️ SENSÖR ZAMAN DAMGASI</div>
+        <div style="color: #00ffcc; font-family: monospace; font-size: 22px; font-weight: bold;">
+          {{ zamanDamgasi() }} <span style="font-size: 14px; opacity: 0.8;">ms</span>
+        </div>
+      </div>
+      
   </div>
+
 
   <!-- Sağ Kolon (En Geniş Alan): Harita -->
   <div class="panel map-panel">
@@ -152,12 +177,41 @@
   </div>
 </div>
 
+
+<div class="charts-container" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin-top: 20px;">
+  
+  <!-- Açı Grafiği (Roll, Pitch, Yaw) -->
+  <div class="panel" style="background: #111827; padding: 15px; border-radius: 8px; border: 1px solid #1f2937;">
+    <h4 style="color: #38bdf8; margin-bottom: 10px; font-size: 13px;">UÇUŞ AÇILARI (ROLL / PITCH / YAW)</h4>
+    <canvas id="angleChart"></canvas>
+  </div>
+
+  <!-- İvmeölçer Grafiği (Ax, Ay, Az) -->
+  <div class="panel" style="background: #111827; padding: 15px; border-radius: 8px; border: 1px solid #1f2937;">
+    <h4 style="color: #4ade80; margin-bottom: 10px; font-size: 13px;">İVMEÖLÇER (AX / AY / AZ)</h4>
+    <canvas id="accelChart"></canvas>
+  </div>
+
+  <!-- Jiroskop Grafiği (Gx, Gy, Gz) -->
+  <div class="panel" style="background: #111827; padding: 15px; border-radius: 8px; border: 1px solid #1f2937;">
+    <h4 style="color: #f43f5e; margin-bottom: 10px; font-size: 13px;">JİROSKOP (GX / GY / GZ)</h4>
+    <canvas id="gyroChart"></canvas>
+  </div>
+
+</div>
+
+
 <!-- Alt Panel: Uçuş Karakutusu -->
 <div class="panel history-panel">
-  <div class="history-header">
-    <h3 class="panel-title" style="margin: 0; border: none; padding: 0;">UÇUŞ VERİ KAYITLARI (KARAKUTU)</h3>
-    <div class="live-badge">CANLI AKTARIM</div>
+<div class="history-header" style="display: flex; justify-content: space-between; align-items: center;">
+  <h3 class="panel-title" style="margin: 0; border: none; padding: 0;">UÇUŞ VERİ KAYITLARI (KARAKUTU)</h3>
+  <div style="display: flex; gap: 12px; align-items: center;">
+    <button class="btn btn-success" (click)="csvIndir()" style="width: auto; padding: 8px 16px; font-size: 11px;">
+      📥 RAPOR İNDİR (CSV)
+    </button>
+    <div class="live-badge" style="margin: 0;">CANLI AKTARIM</div>
   </div>
+</div>
 
   @if (gecmisVeriler().length === 0) {
     <p style="text-align: center; color: #8c93a8; padding: 20px;">Bağlantı bekleniyor...</p>
@@ -182,6 +236,7 @@
             <th>Jiro Z</th>
             <th>Yatış (Roll)</th>
             <th>Yunuslama (Pitch)</th>
+            <th>Sapma (Yaw)</th>
           </tr>
         </thead>
         <tbody>
@@ -203,6 +258,7 @@
               <td class="text-green">{{ kayit.gz }}</td>
               <td class="text-yellow">{{ kayit.roll }}</td>
               <td class="text-yellow">{{ kayit.pitch }}</td>
+              <td class="text-yellow">{{ kayit.yaw }}</td>
             </tr>
           }
         </tbody>

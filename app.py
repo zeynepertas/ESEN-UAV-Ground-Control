@@ -6,6 +6,11 @@ import threading # Aynı anda hem web sunucusunu (Flask) çalıştırıp hem de 
 import sqlite3 # Hafif ve dosya tabanlı bir SQL veritabanı motoru. Ayrı bir sunucu kurulumu gerektirmez.
 from datetime import datetime # Veritabanına kayıt atarken o anın tarih ve saat (Timestamp) bilgisini almak için.
 from config import RABBITMQ_URL # Şifreleri ve gizli sunucu adreslerini ana kodda açık etmemek için dışarıdaki 'config.py' dosyasından içe aktarıyoruz.
+import csv
+from io import StringIO
+from flask import Response
+
+
 
 # Flask uygulamasını başlat. '__name__' parametresi, uygulamanın ana modülden çalıştığını belirtir.
 app = Flask(__name__)
@@ -25,7 +30,7 @@ def veritabani_hazirla():
     İçerisinde İHA'nın tüm sensör verilerini (Karakutu) tutacak 'telemetri' tablosunu hazırlar.
     """
     # 'ucus_verileri.db' dosyasına bağlan. Dosya yoksa sıfırdan oluşturur.
-    conn = sqlite3.connect('ucus_verileri.db')
+    conn = sqlite3.connect('ucus_verileri.db', timeout=10)
     # Veritabanında SQL komutları (sorguları) çalıştırabilmek için bir imleç (cursor) açıyoruz.
     cursor = conn.cursor()
     
@@ -66,7 +71,7 @@ veritabani_hazirla()
 # sonradan eklediğimizde kodun patlamaması için (Eski tabloya yeni sütun eklemek için) ALTER TABLE kullanıyoruz.
 # try-except bloğu kullanıyoruz çünkü sütun zaten varsa ALTER komutu hata verir. Hata verirse (except), boş ver (pass) deyip geçiyoruz.
 try:
-    conn = sqlite3.connect('ucus_verileri.db')
+    conn = sqlite3.connect('ucus_verileri.db', timeout=10)
     conn.execute("ALTER TABLE telemetri ADD COLUMN durum TEXT")
     conn.commit()
     conn.close()
@@ -74,7 +79,7 @@ except:
     pass
 
 try:
-    conn = sqlite3.connect('ucus_verileri.db')
+    conn = sqlite3.connect('ucus_verileri.db', timeout=10)
     conn.execute("ALTER TABLE telemetri ADD COLUMN sicaklik REAL")
     conn.execute("ALTER TABLE telemetri ADD COLUMN ax REAL")
     conn.execute("ALTER TABLE telemetri ADD COLUMN ay REAL")
@@ -85,7 +90,7 @@ except:
     pass
 
 try:
-    conn = sqlite3.connect('ucus_verileri.db')
+    conn = sqlite3.connect('ucus_verileri.db', timeout=10)
     conn.execute("ALTER TABLE telemetri ADD COLUMN gx REAL")
     conn.execute("ALTER TABLE telemetri ADD COLUMN gy REAL")
     conn.execute("ALTER TABLE telemetri ADD COLUMN gz REAL")
@@ -95,7 +100,7 @@ except:
     pass
 
 try:
-    conn = sqlite3.connect('ucus_verileri.db')
+    conn = sqlite3.connect('ucus_verileri.db', timeout=10)
     # İHA'nın Yatış (Roll) ve Yunuslama (Pitch) açılarını barındıracak en son eklediğimiz sütunlar.
     conn.execute("ALTER TABLE telemetri ADD COLUMN roll REAL")
     conn.execute("ALTER TABLE telemetri ADD COLUMN pitch REAL")
@@ -144,6 +149,7 @@ def rabbitmq_dinle():
             anlik_veri["gz"] = veri.get("gz", 0)
             anlik_veri["roll"] = veri.get("roll", 0)
             anlik_veri["pitch"] = veri.get("pitch", 0)
+            anlik_veri["yaw"] = veri.get("yaw", 0)
 
             # --- VERİTABANINA AKILLI KAYIT SİSTEMİ ---
             # MPU verileri aşırı hızlı akar, saniyede onlarca kez aynı koordinat ve açı gelebilir.
@@ -162,13 +168,14 @@ def rabbitmq_dinle():
                 anlik_veri["gy"],
                 anlik_veri["gz"],
                 anlik_veri["roll"],
-                anlik_veri["pitch"]
+                anlik_veri["pitch"],
+                anlik_veri["yaw"]
             )
             
             # Eğer şu anki değerler özeti, veritabanına en son kaydettiğimiz özetten FARKLIYSA
             # (Yani dronun açısı, konumu veya durumu zerrece değiştiyse) o zaman veritabanına yeni satır ekle.
             if son_kaydedilen_veri != mevcut_ozet:
-                conn = sqlite3.connect('ucus_verileri.db')
+                conn = sqlite3.connect('ucus_verileri.db', timeout=10)
                 cursor = conn.cursor()
                 
                 # O anki bilgisayar saatini 'Yıl-Ay-Gün Saat:Dakika:Saniye' formatında metne çevir.
@@ -177,8 +184,8 @@ def rabbitmq_dinle():
                 # INSERT INTO ile SQL Tablosuna yeni bir satır (Karakutu kaydı) ekle.
                 # '?' işaretleri SQL Injection saldırılarını önlemek için güvenli parametre atama yöntemidir.
                 cursor.execute('''
-                    INSERT INTO telemetri (zaman, irtifa, hiz, enlem, boylam, durum, sicaklik, ax, ay, az, gx, gy, gz, roll, pitch)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO telemetri (zaman, irtifa, hiz, enlem, boylam, durum, sicaklik, ax, ay, az, gx, gy, gz, roll, pitch, yaw)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     su_an, 
                     anlik_veri["irtifa"], 
@@ -194,7 +201,8 @@ def rabbitmq_dinle():
                     anlik_veri["gy"],
                     anlik_veri["gz"],
                     anlik_veri["roll"],
-                    anlik_veri["pitch"]
+                    anlik_veri["pitch"],
+                    anlik_veri["yaw"]
                 ))
                 conn.commit() # Kaydı onayla
                 conn.close()  # Veritabanını kapat
@@ -273,7 +281,7 @@ def gecmis_verileri_getir():
     limit = request.args.get('limit', 20, type=int)
     try:
         # Veritabanına (Karakutuya) bağlan
-        conn = sqlite3.connect('ucus_verileri.db')
+        conn = sqlite3.connect('ucus_verileri.db', timeout=10)
         
         # Veritabanından gelen satırları normal bir dizi (Tuple) yerine sözlük (Dictionary/Object) yapısında (Key-Value) alabilmek için
         # Row factory ayarını yapıyoruz. (Böylece satır["irtifa"] şeklinde okuyabiliriz).
@@ -295,6 +303,43 @@ def gecmis_verileri_getir():
     except Exception as e:
         # Sunucu tarafında hata çıkarsa 500 (Internal Server Error) dön.
         return jsonify({"hata": str(e)}), 500
+    
+@app.route('/api/export/csv', methods=['GET'])
+def csv_disa_aktar():
+    try:
+        conn = sqlite3.connect('ucus_verileri.db', timeout=10)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM telemetri ORDER BY id DESC")
+        satirlar = cursor.fetchall()
+        conn.close()
+
+        def generate():
+            data = StringIO()
+            # 1. YENİ EK: Excel'in Türkçe karakterleri (ş,ğ,ı) bozmadan okuması için UTF-8 BOM damgası ekliyoruz
+            data.write('\ufeff') 
+            
+            # 2. YENİ EK: Excel verileri düzgün sütunlara bölsün diye ayracı noktalı virgül (;) yapıyoruz
+            writer = csv.writer(data, delimiter=';')
+            
+            if satirlar:
+                writer.writerow(satirlar[0].keys())
+                yield data.getvalue()
+                data.seek(0)
+                data.truncate(0)
+            for satir in satirlar:
+                writer.writerow(dict(satir).values())
+                yield data.getvalue()
+                data.seek(0)
+                data.truncate(0)
+
+        return Response(generate(), mimetype='text/csv', headers={
+            "Content-Disposition": "attachment; filename=ucus_kara_kutu_raporu.csv"
+        })
+    except Exception as e:
+        return jsonify({"hata": str(e)}), 500   
+    
+    
 
 # Eğer bu dosya (app.py) terminalden direkt çalıştırılmışsa:
 if __name__ == '__main__':

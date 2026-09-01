@@ -6,6 +6,10 @@
 #define TXD2 17
 #define GPS_BAUD 9600 //konusma hizi
 
+// Kesme (Interrupt) bayrağı: MPU'dan sinyal geldiğinde bu True olacak
+volatile bool mpuVeriHazir = false;//sensörün "yeni veri var" diye bağırdığı (Interrupt) anlarda tetiklenen bir alarm bayrağı
+
+//ESP32'nin Wi-Fi üzerinden arayıp bulacağı Python TCP sunucusunun (bilgisayarımın) adres bilgileri
 const char* ssid = "zeynepertas";     // telefonumun Wi-Fi adı
 const char* password = "a19E908-"; // Wi-Fi şifrem
 const char* bilgisayar_ip = "172.20.10.12"; //pc nin yerel ip adresi(python sunucusunu dinleyeceğimiz adres)
@@ -23,6 +27,7 @@ unsigned long eskiZaman = 0; // Kronometre hafızası mpu zamanlayicisi icin
 unsigned long sonFiltreZamani = 0;
 float roll = 0.0;
 float pitch = 0.0;
+float yaw = 0.0; // YAW: İHA'nın Z ekseni etrafındaki yönelmesi
 
 // --- KALİBRASYON OFFSET DEĞİŞKENLERİ ---
 float gyroX_offset = 0.0, gyroY_offset = 0.0, gyroZ_offset = 0.0;
@@ -31,11 +36,16 @@ float accX_offset = 0.0, accY_offset = 0.0, accZ_offset = 0.0;
 const int MPU_ADDR = 0x68;//mpunun 12c adresi
 int16_t ax, ay, az, gx, gy, gz;//ivme ve jireskop verileri 16 bit
 
+// Fonksiyon prototipi (Derleyiciye önceden haber veriyoruz)
+void IRAM_ATTR mpuISR(){
+  mpuVeriHazir = true; // Sadece bayrağı kaldırıp hemen ana döngüye dönüyoruz
+};
+
 // İHA'nın anlık otopilot modu hafızası
 String aktifUcusModu = "NORMAL";
 
 
-
+//Sistem açıldığında masada düz dururken MPU6050'den 500 tane ham örnek alır. Sensör düz durduğu halde ivme 0 değilse veya dönmediği halde jiroskop 0 değilse, aradaki farkı hesaplayıp "Offset (Hata Payı)" değişkenlerine kaydeder
 void mpuKalibrasyon() {
   Serial.println("========================================");
   Serial.println("[KALİBRASYON] MPU6050 Kalibre ediliyor...");
@@ -73,6 +83,7 @@ void mpuKalibrasyon() {
   // Ortalamaları bularak kalıcı offset (hata) değerlerine yaz
   accX_offset = top_ax / kalibrasyon_sayisi;
   accY_offset = top_ay / kalibrasyon_sayisi;
+  
   // Z ekseni yerçekimi olduğu için düz durduğunda 1.0 okumalıdır. Farkı alıyoruz.
   accZ_offset = (top_az / kalibrasyon_sayisi) - 1.0; 
   
@@ -85,9 +96,7 @@ void mpuKalibrasyon() {
 }
 
 
-
-
-void setup() {
+void setup() {//cihaza güç verildiğinde sadece 1 kez çalışır
   //gps setup kodu
   Serial.begin(115200);
   gpsSerial.begin(GPS_BAUD, SERIAL_8N1, RXD2, TXD2);//gps ve esp koprusu
@@ -119,6 +128,22 @@ void setup() {
   delay(500); // Sensör kendine gelsin diye yarım saniye bekle
   mpuKalibrasyon();
 
+  // --- INTERRUPT (KESME) TANIMLAMASI ---
+  pinMode(4, INPUT); //gpio 4 pinini giriş olarak ayarladim
+  attachInterrupt(digitalPinToInterrupt(4), mpuISR, RISING); // ESP32'ye "Ne iş yapıyorsan yap, GPIO 4 pinine elektrik geldiği an işi bırak ve mpuISR fonksiyonunu çalıştırarak veri bayrağını kaldır" talimatını verir.
+
+    // MPU6050 Kesme (Interrupt) Ayarları
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x37); // INT Pin konfigürasyon registerı
+  Wire.write(0x02); // INT pini aktifken YÜKSEK (HIGH) olsun
+  Wire.endTransmission(true);
+  
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x38); // Interrupt Enable (Kesme Açma) registerı
+  Wire.write(0x01); // "Veri Hazır" (Data Ready) kesmesini aktif et
+  Wire.endTransmission(true);
+
+
   // Wİ-Fİ BAĞLANTISI (Buradan sonrası kodunda zaten var)
   WiFi.disconnect(true, true);
   // ...
@@ -148,6 +173,8 @@ void setup() {
 
 String nmeaSatiri="";//sifirdan baslattik
 
+
+
 void komutlariKontrolEt() {
   if (wifiClient.available() > 0) {
     String gelenKomut = wifiClient.readStringUntil('\n');
@@ -175,6 +202,8 @@ void komutlariKontrolEt() {
   }
 }
 
+
+
 void loop() {//ESP32 calistigi surece sonsuza kadar doner
 
   if (!wifiClient.connected()) {//eger pc de baglanti henuz kurulmadiysa ya da koptuysa yeniden baglanmaya calisir
@@ -189,7 +218,7 @@ void loop() {//ESP32 calistigi surece sonsuza kadar doner
   komutlariKontrolEt();
 
   while (gpsSerial.available() > 0){//eger gps den okunacak veri varsa
-    char gpsData = gpsSerial.read();
+    char gpsData = gpsSerial.read();//uydudan gelen karmaşık NMEA metinlerini ("$GPGGA...") harf harf okur, virgülleri sayarak Enlem, Boylam ve Rakım değerlerini cımbızla çekip alır. Değişim varsa bunu doğrudan paketler.
     nmeaSatiri+=gpsData; //data her okundugunda nmeasatiri artar
     if(gpsData=='\n'){//satir bitti mi diye kontrol
     
@@ -239,13 +268,13 @@ void loop() {//ESP32 calistigi surece sonsuza kadar doner
     }
   } 
 
-  //mpu loop kodu
-   if (millis() - eskiZaman >= 100) {// cok hizli akiyordu zamanlayici koydum
-    // Delta Time (dt) Hesaplaması (Filtre için saniye cinsinden geçen zaman)
+    //mpu loop kodu
+    // --- MPU LOOP KODU (ZAMANLAYICI MİMARİSİ) ---
+    if (mpuVeriHazir) { //yani interrupt tetiklenirse eğer
+    mpuVeriHazir = false; // İçeri girer girmez bayrağı indir (bir sonraki kesme için bekle)
     unsigned long suAn = millis();
     float dt = (suAn - sonFiltreZamani) / 1000.0;
     sonFiltreZamani = suAn;
-    eskiZaman = suAn; // MPU döngü zamanlayıcısı
 
    Wire.beginTransmission(MPU_ADDR);
    Wire.write(0x3B);//mpu da ivme verilerinin tutuldugu ilk adresten veriyi istiyorum
@@ -294,19 +323,38 @@ void loop() {//ESP32 calistigi surece sonsuza kadar doner
      roll = 0.96 * (roll + gercek_gx * dt) + 0.04 * accRoll;
      pitch = 0.96 * (pitch + gercek_gy * dt) + 0.04 * accPitch;
 
-      // String(değişken, 3) komutu virgülden sonra 3 basamak gönderilmesini sağlar
-      String mpuVeri = "MPU," + String(gercek_ax, 3) + "," + 
-      String(gercek_ay, 3) + "," + 
-      String(gercek_az, 3) + "," + 
-      String(gercek_gx, 2) + "," + 
-      String(gercek_gy, 2) + "," + 
-      String(gercek_gz, 2) + "," + 
-      String(sicaklikC, 2) + ","+
-      String(roll, 2) + "," + 
-      String(pitch, 2) + "\n";
+     // 3. YAW İÇİN ÖLÜ BANT (DEADBAND) FİLTRESİ
+     // Eğer Z eksenindeki dönüş hızı saniyede 1 dereceden küçükse, bunu titreşim/gürültü kabul et ve yoksay (0'a eşitle).
+     // Bu sayede dron masada sabit dururken Yaw açısı yavaş yavaş kaymaz (Sapma/Drift engellenir).
+     if (abs(gercek_gz) < 1.0) {
+         gercek_gz = 0.0;
+     }
+
+     // 4. YAW HESAPLAMA (Jiroskop İntegrali)
+     yaw = yaw + (gercek_gz * dt);
+
+     // --- YENİ ZAMAN DAMGASI (TIMESTAMP) EKLENTİSİ ---
+     // 'suAn' değişkeni paketin hemen başına (MPU'dan sonra) eklendi.
+     // String(değişken, 3) komutu virgülden sonra 3 basamak gönderilmesini sağlar
+     
+     if (suAn - eskiZaman >= 100) {
+     eskiZaman = suAn; // Kronometreyi sıfırla
+     String mpuVeri = "MPU," + 
+     String(suAn) + "," +                 // <-- İŞTE BURASI: Zaman damgası eklendi!
+     String(gercek_ax, 3) + "," + 
+     String(gercek_ay, 3) + "," + 
+     String(gercek_az, 3) + "," + 
+     String(gercek_gx, 2) + "," + 
+     String(gercek_gy, 2) + "," + 
+     String(gercek_gz, 2) + "," + 
+     String(sicaklikC, 2) + ","+
+     String(roll, 2) + "," + 
+     String(pitch, 2) + "," +
+     String(yaw, 2) + "\n"; // 11. Endeks olarak Yaw açısı eklendi
 
 
-      wifiClient.print(mpuVeri); // kalibre edilmiş Veriyi kablosuz olarak fırlatıyorum
+     wifiClient.print(mpuVeri); // kalibre edilmiş Veriyi kablosuz olarak fırlatıyorum
+     } 
     }
   }
   komutlariKontrolEt();

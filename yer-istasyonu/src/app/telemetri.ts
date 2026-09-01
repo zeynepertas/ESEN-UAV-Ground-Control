@@ -11,7 +11,6 @@ import { Client } from '@stomp/stompjs'; // RabbitMQ (veya diğer Message Broker
 export class TelemetriService {
   
   // --- YAYIN KANALLARI (OBSERVABLES) ---
-  
   // BehaviorSubject: İçerisinde her zaman 'en son' veriyi hafızasında tutan bir yayın kanalıdır.
   // Component (Arayüz) bu kanala abone (subscribe) olduğunda, beklemeden en son veriyi anında alır.
   // Başlangıçta 0'lardan oluşan sahte (dummy) bir veri ile başlatıyoruz.

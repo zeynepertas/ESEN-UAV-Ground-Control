@@ -2,18 +2,109 @@ import { Component, signal, computed, inject, DestroyRef, AfterViewInit } from '
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop'; // Component silindiğinde arka planda çalışan dinlemeleri (memory leak'i) durdurmak için
 import { RouterOutlet } from '@angular/router'; // Birden fazla sayfa (Routing) yapısı kullanmak istersek diye ekli
 import * as L from 'leaflet'; // Google Maps benzeri, açık kaynaklı harita kütüphanesi (Leaflet)
-
 // Kendi yazdığımız Telemetri Servisini içeri aktarıyoruz. (Bu servis RabbitMQ ile konuşmayı hallediyor)
 import { TelemetriService } from './telemetri';
+import { NgIf } from '@angular/common';
+import { Chart, registerables } from 'chart.js';
+Chart.register(...registerables);
+
 
 // @Component: Bu sınıfın (class) bir Angular Bileşeni (Component) olduğunu belirten dekoratör.
 @Component({
   selector: 'app-root', // Bu bileşenin HTML etiket adı (Örn: index.html içinde <app-root></app-root> olarak çağrılır)
-  imports: [RouterOutlet], 
+  imports: [RouterOutlet, NgIf], 
   templateUrl: './app.html', // Bu bileşenin görsel (HTML) yüzü
   styleUrl: './app.css'      // Bu bileşenin stil (CSS) dosyası
 })
 export class App implements AfterViewInit {
+  angleChart: any;
+  accelChart: any;
+  gyroChart: any;
+
+  ngAfterViewInit_silindi() {
+    // I am completely deleting this chunk to fix duplicate function, leaving this blank line.
+  }
+
+  grafikleriBaslat() {
+    // 1. Açı Grafiği
+    this.angleChart = new Chart('angleChart', {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'Roll', data: [], borderColor: '#38bdf8', borderWidth: 1.5, pointRadius: 0 },
+          { label: 'Pitch', data: [], borderColor: '#4ade80', borderWidth: 1.5, pointRadius: 0 },
+          { label: 'Yaw', data: [], borderColor: '#fbbf24', borderWidth: 1.5, pointRadius: 0 }
+        ]
+      },
+      options: { responsive: true, animation: false, scales: { x: { display: false } } }
+    });
+
+    // 2. İvme Grafiği
+    this.accelChart = new Chart('accelChart', {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'Ax', data: [], borderColor: '#f43f5e', borderWidth: 1.5, pointRadius: 0 },
+          { label: 'Ay', data: [], borderColor: '#a855f7', borderWidth: 1.5, pointRadius: 0 },
+          { label: 'Az', data: [], borderColor: '#06b6d4', borderWidth: 1.5, pointRadius: 0 }
+        ]
+      },
+      options: { responsive: true, animation: false, scales: { x: { display: false } } }
+    });
+
+    // 3. Jiroskop Grafiği
+    this.gyroChart = new Chart('gyroChart', {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'Gx', data: [], borderColor: '#ec4899', borderWidth: 1.5, pointRadius: 0 },
+          { label: 'Gy', data: [], borderColor: '#84cc16', borderWidth: 1.5, pointRadius: 0 },
+          { label: 'Gz', data: [], borderColor: '#3b82f6', borderWidth: 1.5, pointRadius: 0 }
+        ]
+      },
+      options: { responsive: true, animation: false, scales: { x: { display: false } } }
+    });
+  }
+
+  // Canlı veriler her geldiğinde (WebSocket / SSE döngüsünde) bu fonksiyonu çağıracağız:
+  grafikleriGuncelle(veri: any) {
+    const zamanDamgasi = new Date().toLocaleTimeString();
+
+    // Maksimum 20 veri tutarak ekranın kaymasını sağlıyoruz
+    const maxVeri = 20;
+
+    [this.angleChart, this.accelChart, this.gyroChart].forEach(chart => {
+      if (chart.data.labels.length > maxVeri) {
+        chart.data.labels.shift();
+        chart.data.datasets.forEach((ds: any) => ds.data.shift());
+      }
+    });
+
+    // Açı verileri
+    this.angleChart.data.labels.push(zamanDamgasi);
+    this.angleChart.data.datasets[0].data.push(veri.roll);
+    this.angleChart.data.datasets[1].data.push(veri.pitch);
+    this.angleChart.data.datasets[2].data.push(veri.yaw);
+    this.angleChart.update('none');
+
+    // İvme verileri
+    this.accelChart.data.labels.push(zamanDamgasi);
+    this.accelChart.data.datasets[0].data.push(veri.ax);
+    this.accelChart.data.datasets[1].data.push(veri.ay);
+    this.accelChart.data.datasets[2].data.push(veri.az);
+    this.accelChart.update('none');
+
+    // Jiroskop verileri
+    this.gyroChart.data.labels.push(zamanDamgasi);
+    this.gyroChart.data.datasets[0].data.push(veri.gx);
+    this.gyroChart.data.datasets[1].data.push(veri.gy);
+    this.gyroChart.data.datasets[2].data.push(veri.gz);
+    this.gyroChart.update('none');
+  }
+
   // --- SERVİSLERİN İÇE AKTARILMASI (DEPENDENCY INJECTION) ---
   // inject(): Angular 16+ ile gelen yeni ve temiz bir servis çağırma yöntemidir. (Eski versiyonlarda constructor içinde yapılırdı).
   
@@ -42,6 +133,13 @@ export class App implements AfterViewInit {
   gz = signal(0);
   roll = signal(0);  // Ufuk Göstergesi için Yatış açısı
   pitch = signal(0); // Ufuk Göstergesi için Yunuslama açısı
+  yaw = signal(0);   // Yönelme açısı
+  zamanDamgasi = signal<number>(0); // ESP32'nin veri üretim zamanı
+
+  // --- BAĞLANTI KOPMASI (WATCHDOG) DEĞİŞKENLERİ ---
+  baglantiKoptu = signal<boolean>(false); // Uyarıyı tetikleyecek sinyal
+  private sonVeriZamani: number = Date.now(); // Son verinin geldiği milisaniye
+  private watchdogTimer: any; // Sayacın kendisi
 
   // --- HARİTA DEĞİŞKENLERİ ---
   private map: L.Map | undefined;       // Haritanın ta kendisi (Objesi)
@@ -75,7 +173,7 @@ export class App implements AfterViewInit {
   gpsKoptu = computed(() => this.enlem() === 0 || this.boylam() === 0);
   
   // Sınır İhlali Formülü (Geofencing): Dron sanal bir kafesin (belirli koordinatların) dışına çıktıysa True döner.
-  sinirIhlali = computed(() => {
+  sinirIhlali = computed(() => {//(Computed): Başka sinyallere bakarak otomatik karar veren otonom zekalardır.
        const lat = this.enlem();
        const lon = this.boylam();
        if (lat === 0 || lon === 0) return false;
@@ -99,6 +197,11 @@ export class App implements AfterViewInit {
       // rami şişirmesin diye, bu dinlemeyi de otomatik olarak parçala/sil diyoruz.
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe((veri) => {
+        console.log("RabbitMQ'dan paket geldi:", veri);
+        // Veri geldiği an sayacı sıfırla ve alarmı kapat!
+        this.sonVeriZamani = Date.now();
+        this.baglantiKoptu.set(false);
+
         // RabbitMQ'dan bize ulaşan yeni veri sözlüğünü aldık ve Angular Sinyallerimizi (.set ile) güncelledik.
         // Bu sinyaller güncellendiği an HTML tarafındaki (Örn: {{ roll() }}) kısımlar anında otomatik değişecek!
         this.irtifa.set(veri.irtifa);
@@ -116,6 +219,10 @@ export class App implements AfterViewInit {
         if (veri.gz !== undefined) this.gz.set(veri.gz);
         if (veri.roll !== undefined) this.roll.set(veri.roll);
         if (veri.pitch !== undefined) this.pitch.set(veri.pitch);
+        if (veri.yaw !== undefined) this.yaw.set(veri.yaw);
+        if (veri.zaman_damgasi !== undefined) {
+          this.zamanDamgasi.set(veri.zaman_damgasi);
+        }
         if (veri.zemin_rakimi !== undefined) {
           this.zeminYuksekligi.set(veri.zemin_rakimi);
         }
@@ -131,6 +238,9 @@ export class App implements AfterViewInit {
           // Harita fonksiyonuna yolla
           this.updateMapPosition(veri.enlem, veri.boylam);
         }
+
+        // --- GRAFİKLERİN GÜNCELLENMESİ ---
+        this.grafikleriGuncelle(veri);
       });
       
     // 2. KARAKUTU ABONELİĞİ (SADECE veritabanında yeni bir kayıt olduğunda çalışır)
@@ -142,7 +252,25 @@ export class App implements AfterViewInit {
         // Bu sayede alttaki dev tablo anlık olarak büyümeye başlar.
         this.gecmisiGetir();
       });
+
+
+      // --- BEKÇİ KÖPEĞİ (WATCHDOG) BAŞLATMA ---
+     // Her 1 saniyede (1000 ms) bir uyanıp süreyi kontrol eder.
+     this.watchdogTimer = setInterval(() => {
+      const gecenSure = Date.now() - this.sonVeriZamani;
+      console.log("Timer çalışıyor. Geçen süre (ms):", gecenSure);
+      // Eğer son verinin üzerinden 3 saniyeden (3000 ms) fazla zaman geçtiyse
+      if (gecenSure > 3000) {
+        this.baglantiKoptu.set(true); // Alarmı tetikle!
+        console.log("SİSTEM UYARISI: Bağlantı koptu, sayaç 3 saniyeyi geçti!"); // <-- Test için ekledik
+      }
+     }, 1000);
+
+     // Bileşen (sayfa) kapatılırsa timer'ı temizle ki arka planda sonsuza dek çalışıp RAM'i şişirmesin (Memory Leak önlemi).
+     this.destroyRef.onDestroy(() => clearInterval(this.watchdogTimer));
+
   }
+
 
   // --- HARİTANIN YÜKLENMESİ ---
   // ngAfterViewInit(): Angular'ın "HTML yüklendi, ekran çizildi" deme noktasıdır. 
@@ -167,6 +295,9 @@ export class App implements AfterViewInit {
     ];
     // Bunu haritaya %10 (0.1) saydamlıkla yeşil renkte çiz.
     L.rectangle(safeBounds, { color: '#28a745', weight: 2, fillOpacity: 0.1 }).addTo(this.map);
+
+    // --- GRAFİKLERİN YÜKLENMESİ ---
+    this.grafikleriBaslat();
   }
 
   // --- DRONUN HARİTADA HAREKET ETMESİ ---
@@ -205,7 +336,9 @@ export class App implements AfterViewInit {
     this.gecmisiGetir();
   }
 
-  // API'den (app.py) geçmiş verileri çeken asenkron (async) fonksiyon.
+
+
+  // API'den (app.py) geçmiş verileri çeken asenkron (async) fonksiyon.api üzerinden python(flask) ile konuştuğumuz bölüm
   async gecmisiGetir() {
     try {
       // Python Flask sunucumuzdaki /api/gecmis linkine istek atıyoruz. Limit değişkenini de URL sonuna ekliyoruz.
@@ -217,6 +350,14 @@ export class App implements AfterViewInit {
     } catch (error) {
       console.error("Geçmiş veriler alınamadı:", error);
     }
+  }
+
+csvIndir() {
+    // Tarayıcının yeni bir sekmede doğrudan endpoint'i tetikleyip dosyayı indirmesini sağlar
+    const link = document.createElement('a');
+    link.href = 'http://127.0.0.1:5000/api/export/csv';
+    link.target = '_blank';
+    link.click();
   }
 
   // --- KOMUT GÖNDERME FONKSİYONLARI ---

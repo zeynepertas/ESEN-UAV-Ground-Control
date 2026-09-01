@@ -23,7 +23,9 @@ anlik_veri = {
     "gz": 0,            # MPU6050'nin Z eksenindeki jiroskop verisi
     "sicaklik": 0.0,    # MPU6050 içindeki dahili sıcaklık sensörünün okuduğu Celcius değeri
     "roll": 0.0,        # Arduino'daki Tamamlayıcı Filtre (Complementary Filter) ile hesaplanan Yatış açısı (Roll)
-    "pitch": 0.0        # Arduino'da hesaplanan Yunuslama açısı (Pitch)
+    "pitch": 0.0,      # Arduino'da hesaplanan Yunuslama açısı (Pitch)
+    "zaman_damgasi": 0,
+    "yaw": 0.0
 }
 
 # ESP32'nin TCP üzerinden bize bağlanıp bağlamadığını tutan değişken.
@@ -158,7 +160,7 @@ def rabbitmq_telemetri_gonderici():
     Görevi: ESP32'den gelen ve 'anlik_veri' sözlüğünde güncellenen 
     sensör değerlerini her saniyede bir paketleyip RabbitMQ üzerinden Arayüze ve Veritabanı API'sine yaymaktır (Broadcasting).
     """
-    global anlik_veri
+    global anlik_veri, aktif_soket_baglantisi
     while True: # RabbitMQ kapanırsa pes etmemesi için sonsuz dış döngü
         try:
             # RabbitMQ sunucusuna bağlanmak için Pika bağlantısı kur
@@ -170,10 +172,16 @@ def rabbitmq_telemetri_gonderici():
             channel.queue_declare(queue='telemetri_kuyrugu', durable=True)
             
             while True: # Bağlantı kurulduğunda sürekli olarak veri basacağımız iç döngü
+                # Eğer ESP32 bağlı değilse arayüze eski verileri SPAM yapmayı durdur (Böylece Angular'daki Watchdog devreye girsin!)
+                if aktif_soket_baglantisi is None:
+                    time.sleep(1)
+                    continue
+                
                 # 'anlik_veri' içindeki değerleri doğrudan yollamak yerine 'round' fonksiyonu ile
                 # virgülden sonra 2 veya 5 basamak kalacak şekilde yuvarlıyoruz (Örn: 3.14159265 -> 3.14)
                 # Bu işlem, ağdaki veri trafiğini azaltır ve arayüzün (Angular) daha az yorulmasını sağlar.
                 temiz_veri = {
+                    "zaman_damgasi": anlik_veri["zaman_damgasi"],
                     "irtifa": round(anlik_veri["irtifa"], 2),
                     "hiz": round(anlik_veri["hiz"], 2),
                     "enlem": round(anlik_veri["enlem"], 5), # Koordinatlar hassas olduğu için 5 basamak
@@ -188,7 +196,8 @@ def rabbitmq_telemetri_gonderici():
                     "gz": anlik_veri["gz"],
                     "sicaklik": round(anlik_veri["sicaklik"], 2),
                     "roll": round(anlik_veri["roll"], 2),
-                    "pitch": round(anlik_veri["pitch"], 2)
+                    "pitch": round(anlik_veri["pitch"], 2),
+                    "yaw": round(anlik_veri["yaw"], 2)
                 }
                 
                 # Elde ettiğimiz bu temiz sözlüğü JSON (metin tabanlı veri formatı) dosyasına çeviriyoruz.
@@ -248,8 +257,15 @@ def tcp_sunucu_baslat():
         # Ta ki ESP32 Wi-Fi üzerinden "Ben geldim" diyene kadar program alt satıra geçmez.
         client_socket, addr = server_socket.accept() 
         
+        # Eğer ESP32'nin gücü aniden kesilirse (USB çekilirse), recv() komutu sonsuza kadar kilitlenmesin diye 
+        # 2 saniyelik bir zaman aşımı (timeout) koyuyoruz. ESP32 zaten saniyede 10 kere veri yolladığı için 2 saniye sessizlik koptuğu anlamına gelir.
+        client_socket.settimeout(2.0)
+        
         # Biri bağlandığı anda kilit açılır. Bağlanan cihazın IP adresi (addr) ekrana basılır.
         print(f"[TCP Sunucu] ESP32 Başarıyla Bağlandı! Gelen Adres: {addr}")
+        
+        # Yeniden bağlandığında daha önceden 'KOPTU' kalan durumu normale döndür
+        anlik_veri["durum"] = "NORMAL"
         
         # Yukarıda komut gönderici fonksiyonumuz ESP32'ye mesaj atabilsin diye, 
         # bu yeni kurulan sağlam köprüyü (soketi) global değişkene kopyalıyoruz.
@@ -267,6 +283,7 @@ def tcp_sunucu_baslat():
                     # Eğer data değişkeni boş (null/empty) dönerse, bu TCP protokolünde karşı tarafın (ESP32)
                     # fiziksel olarak bağlantıyı kapattığı, koptuğu veya elektriğinin kesildiği anlamına gelir.
                     print("[TCP Sunucu] ESP32 bağlantıyı kapattı (Wi-Fi koptu veya cihaz resetlendi).")
+                    anlik_veri["durum"] = "BAGLANTI KOPTU"
                     break # İç döngüyü kırıp dış döngüye dön (Yeniden bağlanmasını bekle)
                     
                 # Gelen veriler ağda 'bytes' (010101) formatındadır. 
@@ -330,21 +347,23 @@ def tcp_sunucu_baslat():
                         
                         # MPU'dan (Başlık, ax, ay, az, gx, gy, gz, sıcaklık, roll, pitch) olmak üzere 10 parça bekliyoruz.
                         # Ama 8 parça gelse bile çökmeyip okuması için en az 8 şartı koyuyoruz.
-                        if len(parcalar) >= 8: 
+                        # Artık paketin 1. sırasında Zaman Damgası var. Toplam 12 parça bekliyoruz.
+                        if len(parcalar) >= 12: 
                             try:
-                                # String olan parçaları float (kesirli sayı) formatına çevirerek küresel sözlüğe (anlik_veri) gömüyoruz.
-                                anlik_veri["ax"] = float(parcalar[1])
-                                anlik_veri["ay"] = float(parcalar[2])
-                                anlik_veri["az"] = float(parcalar[3])
-                                anlik_veri["gx"] = float(parcalar[4])
-                                anlik_veri["gy"] = float(parcalar[5])
-                                anlik_veri["gz"] = float(parcalar[6])
-                                anlik_veri["sicaklik"] = float(parcalar[7])
+                                # 1. index artık Zaman Damgası (Timestamp)
+                                anlik_veri["zaman_damgasi"] = int(parcalar[1])
                                 
-                                # Eğer Arduino koduna yeni eklediğimiz Roll ve Pitch de (8. ve 9. indis) geldiyse
-                                if len(parcalar) >= 10:
-                                    anlik_veri["roll"] = float(parcalar[8])   # Dronun yatış açısı (Ufuk Göstergesi için)
-                                    anlik_veri["pitch"] = float(parcalar[9])  # Dronun yunuslama açısı
+                                # Diğer tüm veriler 1 indis sağa kaydı (2'den başlıyor)
+                                anlik_veri["ax"] = float(parcalar[2])
+                                anlik_veri["ay"] = float(parcalar[3])
+                                anlik_veri["az"] = float(parcalar[4])
+                                anlik_veri["gx"] = float(parcalar[5])
+                                anlik_veri["gy"] = float(parcalar[6])
+                                anlik_veri["gz"] = float(parcalar[7])
+                                anlik_veri["sicaklik"] = float(parcalar[8])
+                                anlik_veri["roll"] = float(parcalar[9])  
+                                anlik_veri["pitch"] = float(parcalar[10])
+                                anlik_veri["yaw"] = float(parcalar[11]) 
                             except Exception as e:
                                 # Eğer Arduino yanlışlıkla "MPU, 1.2.3.4, a" gibi bozuk veya çevrilemeyen 
                                 # bir sayı yollarsa program patlamasın diye hatayı yakala
@@ -353,6 +372,7 @@ def tcp_sunucu_baslat():
         except Exception as e:
             # Okuma döngüsü esnasında beklenmeyen çok büyük bir hata çıkarsa buraya düşer.
             print(f"[TCP Sunucu] Bağlantı esnasında beklenmeyen hata: {e}")
+            anlik_veri["durum"] = "BAGLANTI KOPTU"
         finally:
             # Ne olursa olsun (İster ESP32 kopsun, ister kod hata versin, ister döngü kırılsın)
             # çıkarken (finally blogu) soketi temiz bir şekilde işletim sistemine geri iade et (close).
