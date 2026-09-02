@@ -46,5 +46,16 @@ describe('Yer İstasyonu Arayüz ve Buton Testleri', () => {
     // Ardından o bölümdeki rapor indirme butonuna basarak dosya indirme fonksiyonunun (CSV) tetiklendiğini test eder.
     cy.contains('button', 'RAPOR İNDİR (CSV)').click();
   });
-
+  
+    it('5. Veritabanı Filtreleme çalışmalı ve veriyi doğrulamalı', () => {
+    // 1. Arayüzdeki dropdown menüsünü bul ve içinden 'alarmlar' seçeneğini otomatik seç
+    cy.get('select').select('alarmlar');
+    
+    // 2. Python'un veritabanına bağlanıp sadece alarmları getirmesi için 1 saniye bekle
+    cy.wait(1000);
+    
+    // 3. DOĞRULAMA (DATA VALIDATION): Tabloda artık 'NORMAL' yazısı OLMAMALI! 
+    // Cypress tüm tabloyu okur ve 'NORMAL' kelimesini bulamazsa testi başarıyla geçer.
+    cy.get('.history-panel').should('not.contain', 'NORMAL');
+  });
 });

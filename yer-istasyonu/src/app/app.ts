@@ -327,6 +327,7 @@ export class App implements AfterViewInit {
   // --- KARAKUTU DEĞİŞKENLERİ VE FONKSİYONLARI ---
   gecmisVeriler = signal<any[]>([]); // Veritabanından gelen satırların (dizilerin) tutulduğu sinyal listesi.
   kayitLimiti = signal<number>(20);  // Tabloda varsayılan olarak kaç satır gösterileceğini tutan sinyal.
+  seciliFiltre = signal<string>('tumu');
 
   // "Daha Fazla Yükle" butonuna tıklandığında çalışır.
   dahaFazlaYukle() {
@@ -342,7 +343,7 @@ export class App implements AfterViewInit {
   async gecmisiGetir() {
     try {
       // Python Flask sunucumuzdaki /api/gecmis linkine istek atıyoruz. Limit değişkenini de URL sonuna ekliyoruz.
-      const response = await fetch(`http://127.0.0.1:5000/api/gecmis?limit=${this.kayitLimiti()}`);
+      const response = await fetch(`http://127.0.0.1:5000/api/gecmis?limit=${this.kayitLimiti()}&filtre=${this.seciliFiltre()}`);
       // Dönen JSON metnini JavaScript listesine çevir.
       const data = await response.json();
       // Tablomuzu besleyen 'gecmisVeriler' sinyaline bu listeyi yükle. (Bunu yapınca tablo anında güncellenir).
@@ -350,6 +351,14 @@ export class App implements AfterViewInit {
     } catch (error) {
       console.error("Geçmiş veriler alınamadı:", error);
     }
+  }
+ 
+
+    // Arayüzdeki menü (Dropdown) değiştiğinde tetiklenecek fonksiyon
+  filtreDegistir(event: Event) {
+    const secilenDeger = (event.target as HTMLSelectElement).value;
+    this.seciliFiltre.set(secilenDeger); // Yeni seçimi kaydet
+    this.gecmisiGetir(); // Tabloyu yeni filtreyle baştan çek
   }
 
 csvIndir() {

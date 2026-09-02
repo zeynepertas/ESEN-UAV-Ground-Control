@@ -271,38 +271,35 @@ def komut_al():
     return jsonify({"durum": "hata", "mesaj": "Komut bulunamadı"}), 400
 
 # Arayüzdeki 'Karakutu (Uçuş Veri Kayıtları)' tablosuna veri sağlamak için API Ucu (URL: http://localhost:5000/api/gecmis)
-# Sadece GET (Veri Alma) isteklerine cevap verir.
 @app.route('/api/gecmis', methods=['GET'])
 def gecmis_verileri_getir():
-    """
-    Veritabanındaki geçmiş uçuş kayıtlarını çeker ve Angular arayüzündeki tabloya liste (JSON Array) olarak gönderir.
-    """
-    # URL'den 'limit' parametresi gelmişse onu al, gelmemişse varsayılan olarak son 20 kaydı getir. (Örn: ?limit=50)
+    # URL'den limit ve filtre parametrelerini al
     limit = request.args.get('limit', 20, type=int)
+    filtre = request.args.get('filtre', 'tumu') # Angular'dan gelen filtre tipini al
+    
     try:
-        # Veritabanına (Karakutuya) bağlan
         conn = sqlite3.connect('ucus_verileri.db', timeout=10)
-        
-        # Veritabanından gelen satırları normal bir dizi (Tuple) yerine sözlük (Dictionary/Object) yapısında (Key-Value) alabilmek için
-        # Row factory ayarını yapıyoruz. (Böylece satır["irtifa"] şeklinde okuyabiliriz).
         conn.row_factory = sqlite3.Row 
         cursor = conn.cursor()
         
-        # 'telemetri' tablosundaki TÜM (*) verileri seç,
-        # 'id' sütununa göre Z'den A'ya (DESC - Descending) sırala (Yani en son eklenen en üstte çıksın).
-        # Sonra da LIMIT ile sadece en güncel X (limit) tanesini getir.
-        cursor.execute("SELECT * FROM telemetri ORDER BY id DESC LIMIT ?", (limit,))
-        satirlar = cursor.fetchall() # Sonucu veritabanından çek.
+        # Gelen filtreye göre dinamik SQL (Veritabanı) sorgusu oluşturuyoruz:
+        if filtre == 'alarmlar':
+            # EĞER FİLTRE ALARMS İSE: Durumu 'NORMAL' olmayan kayıtları getir.
+            sorgu = "SELECT * FROM telemetri WHERE durum != 'NORMAL' ORDER BY id DESC LIMIT ?"
+        else:
+            # EĞER FİLTRE TÜMÜ İSE: Hiçbir şart koşmadan her şeyi getir.
+            sorgu = "SELECT * FROM telemetri ORDER BY id DESC LIMIT ?"
+            
+        cursor.execute(sorgu, (limit,))
+        satirlar = cursor.fetchall()
         conn.close()
         
-        # Gelen satır objelerini klasik Python sözlüklerine çevirip bir liste oluştur.
+        # Sonuçları JSON'a çevirip Angular'a yolla
         veriler = [dict(satir) for satir in satirlar]
-        
-        # Listeyi JSON (Metin Dizisi) formatında arayüze (Angular'a) postala.
-        return jsonify(veriler)
+        return jsonify(veriler), 200
     except Exception as e:
-        # Sunucu tarafında hata çıkarsa 500 (Internal Server Error) dön.
-        return jsonify({"hata": str(e)}), 500
+        print(f"Veritabanı okuma hatası: {e}")
+        return jsonify({"durum": "hata", "mesaj": "Veritabanına ulaşılamadı"}), 500
     
 @app.route('/api/export/csv', methods=['GET'])
 def csv_disa_aktar():
