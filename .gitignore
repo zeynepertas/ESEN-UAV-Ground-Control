@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+env/
+
+# Veritabanı ve Loglar
+*.db
+*.sqlite
+*.log
+ucus_verileri.db
+
+# Node ve Frontend
+node_modules/
+dist/
+.angular/
+
+# Arduino Gizli Dosyaları
+secrets.h

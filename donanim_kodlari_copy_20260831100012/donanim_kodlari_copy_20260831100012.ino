@@ -9,11 +9,8 @@
 // Kesme (Interrupt) bayrağı: MPU'dan sinyal geldiğinde bu True olacak
 volatile bool mpuVeriHazir = false;//sensörün "yeni veri var" diye bağırdığı (Interrupt) anlarda tetiklenen bir alarm bayrağı
 
-//ESP32'nin Wi-Fi üzerinden arayıp bulacağı Python TCP sunucusunun (bilgisayarımın) adres bilgileri
-const char* ssid = "zeynepertas";     // telefonumun Wi-Fi adı
-const char* password = "a19E908-"; // Wi-Fi şifrem
-const char* bilgisayar_ip = "172.20.10.12"; //pc nin yerel ip adresi(python sunucusunu dinleyeceğimiz adres)
-const int port = 5001;//5000 portunda flask tabamlı http sunucusu calistigi icin 5001 olarak degistirdim
+// ESP32 Wi-Fi ve IP Ayarları dışarıdan (secrets.h) yüklenir.
+#include "secrets.h"
 
 WiFiClient wifiClient;
 

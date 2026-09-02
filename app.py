@@ -15,7 +15,7 @@ from flask import Response
 # Flask uygulamasını başlat. '__name__' parametresi, uygulamanın ana modülden çalıştığını belirtir.
 app = Flask(__name__)
 # Tüm API uçlarına (routes) diğer domain/portlardan erişime izin ver (Angular'ın veri çekebilmesi için şart).
-CORS(app)
+CORS(app, resources={r"/api/*": {"origins": "http://localhost:4200"}})
 
 # RabbitMQ'dan saniyede bir yağan güncel telemetri verilerini geçici olarak tutacağımız hafıza (RAM) sözlüğü.
 anlik_veri = {"irtifa": 0, "hiz": 0}
