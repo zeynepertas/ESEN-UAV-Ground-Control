@@ -54,8 +54,10 @@ describe('Yer İstasyonu Arayüz ve Buton Testleri', () => {
     // 2. Python'un veritabanına bağlanıp sadece alarmları getirmesi için 1 saniye bekle
     cy.wait(1000);
     
-    // 3. DOĞRULAMA (DATA VALIDATION): Tabloda artık 'NORMAL' yazısı OLMAMALI! 
-    // Cypress tüm tabloyu okur ve 'NORMAL' kelimesini bulamazsa testi başarıyla geçer.
+    // 3. POZİTİF DOĞRULAMA: Tablo boş gelmemeli! İçinde en az 1 tane veri satırı (<tr>) olmalı.
+    cy.get('.history-panel tbody tr').should('have.length.greaterThan', 0);
+
+    // 4. NEGATİF DOĞRULAMA: Gelen satırların hiçbirinde 'NORMAL' kelimesi geçmemeli.
     cy.get('.history-panel').should('not.contain', 'NORMAL');
   });
 });

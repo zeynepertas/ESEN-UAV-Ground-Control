@@ -71,6 +71,9 @@ export class App implements AfterViewInit {
 
   // Canlı veriler her geldiğinde (WebSocket / SSE döngüsünde) bu fonksiyonu çağıracağız:
   grafikleriGuncelle(veri: any) {
+    // Eğer grafikler henüz çizilmediyse (sayfa yeni açılıyorsa) hatayı önlemek için bu adımı atla
+    if (!this.angleChart || !this.accelChart || !this.gyroChart) return;
+
     const zamanDamgasi = new Date().toLocaleTimeString();
 
     // Maksimum 20 veri tutarak ekranın kaymasını sağlıyoruz

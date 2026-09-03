@@ -2,6 +2,9 @@
 #include <WiFi.h>
 #include <math.h>
 
+#include "soc/soc.h"           // Brownout dedektörünü kapatmak için gerekli
+#include "soc/rtc_cntl_reg.h"  // Brownout dedektörünü kapatmak için gerekli
+
 #define RXD2 16
 #define TXD2 17
 #define GPS_BAUD 9600 //konusma hizi
@@ -32,6 +35,10 @@ float accX_offset = 0.0, accY_offset = 0.0, accZ_offset = 0.0;
 
 const int MPU_ADDR = 0x68;//mpunun 12c adresi
 int16_t ax, ay, az, gx, gy, gz;//ivme ve jireskop verileri 16 bit
+
+// --- HMC5883L PUSULA TANIMLAMALARI ---
+#define MAG_ADDR 0x1E
+int16_t mag_x, mag_y, mag_z;
 
 // Fonksiyon prototipi (Derleyiciye önceden haber veriyoruz)
 void IRAM_ATTR mpuISR(){
@@ -110,16 +117,30 @@ void setup() {//cihaza güç verildiğinde sadece 1 kez çalışır
 
   delay(100);
 
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(0x6B);     // Tekrar register seç
-  Wire.write(0);        // 0 yazarak uykuyu kapat, çalışmaya başla
-  Wire.endTransmission(true);
-
 // ... (setup içindeki mevcut kodlar)
   Wire.beginTransmission(MPU_ADDR);
   Wire.write(0x6B);     // Tekrar register seç
   Wire.write(0);        // 0 yazarak uykuyu kapat, çalışmaya başla
   Wire.endTransmission(true);
+
+
+  // --- PUSULA (HMC5883L) UYANDIRMA VE KURULUM ---
+  Wire.beginTransmission(MAG_ADDR); 
+  Wire.write(0x02); // Mode Register 
+  Wire.write(0x00); // Sürekli Ölçüm Modu
+  Wire.endTransmission(true);
+
+
+
+
+ //Sensörün beynindeki 0x1A adresine gidip filtre seviyesini 0x04 yapıyoruz. 
+ //Bu sayede sensör saniyede 21 Hz'den daha hızlı gerçekleşen tüm mikro titreşimleri "Bunlar motor ve pervane gürültüsüdür" deyip daha ana karta yollamadan donanım seviyesinde filtreleyip silecek.
+    // --- MPU6050 DONANIMSAL FİLTRE (DLPF) AYARI ---
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x1A); // CONFIG Register'ı (Filtre ayarlarının olduğu donanım adresi)
+  Wire.write(0x04); // 0x04 değeri: 21 Hz filtreleme (Yüksek frekanslı motor/pervane titreşimlerini siler)
+  Wire.endTransmission(true);
+
 
   // MPU UYANDIKTAN HEMEN SONRA KALİBRASYONU ÇAĞIR:
   delay(500); // Sensör kendine gelsin diye yarım saniye bekle
@@ -127,7 +148,7 @@ void setup() {//cihaza güç verildiğinde sadece 1 kez çalışır
 
   // --- INTERRUPT (KESME) TANIMLAMASI ---
   pinMode(4, INPUT); //gpio 4 pinini giriş olarak ayarladim
-  attachInterrupt(digitalPinToInterrupt(4), mpuISR, RISING); // ESP32'ye "Ne iş yapıyorsan yap, GPIO 4 pinine elektrik geldiği an işi bırak ve mpuISR fonksiyonunu çalıştırarak veri bayrağını kaldır" talimatını verir.
+ 
 
     // MPU6050 Kesme (Interrupt) Ayarları
   Wire.beginTransmission(MPU_ADDR);
@@ -149,6 +170,12 @@ void setup() {//cihaza güç verildiğinde sadece 1 kez çalışır
 // Wİ-Fİ BAĞLANTISI
   WiFi.disconnect(true, true);
     delay(1000);
+
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // Brownout (Düşük Voltaj) dedektörünü GİZLİCE KAPAT!
+
+  /* --- Wİ-Fİ GEÇİCİ OLARAK İPTAL EDİLDİ (OFFLINE MOD) ---
+  WiFi.mode(WIFI_STA);
+  WiFi.setTxPower(WIFI_POWER_MINUS_1dBm); 
   WiFi.begin(ssid, password);
   Serial.print("Wi-Fi'ye baglaniyor");
   
@@ -157,7 +184,7 @@ void setup() {//cihaza güç verildiğinde sadece 1 kez çalışır
     delay(500);
     Serial.print(".");
     deneme++;
-    if (deneme > 20) { // 10 saniye boyunca bağlanamazsa pes eder ve sebebini söyler
+    if (deneme > 20) { 
       Serial.println("\nBAĞLANTI BAŞARISIZ OLDU!");
       break;
     }
@@ -166,6 +193,12 @@ void setup() {//cihaza güç verildiğinde sadece 1 kez çalışır
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("\nWi-Fi Baglandi!");
   }
+  */
+  Serial.println("\n[SİSTEM] Wi-Fi guc yetmezligi nedeniyle OFFLINE moda gecildi. Sadece Serial'dan veri basilacak.");
+  
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 1); // Tehlike geçti, dedektörü geri aç!
+  
+   attachInterrupt(digitalPinToInterrupt(4), mpuISR, RISING); // ESP32'ye "Ne iş yapıyorsan yap, GPIO 4 pinine elektrik geldiği an işi bırak ve mpuISR fonksiyonunu çalıştırarak veri bayrağını kaldır" talimatını verir.
 }
 
 String nmeaSatiri="";//sifirdan baslattik
@@ -203,6 +236,7 @@ void komutlariKontrolEt() {
 
 void loop() {//ESP32 calistigi surece sonsuza kadar doner
 
+  /* --- Wİ-Fİ BAĞLANTISI İPTAL EDİLDİ ---
   if (!wifiClient.connected()) {//eger pc de baglanti henuz kurulmadiysa ya da koptuysa yeniden baglanmaya calisir
     Serial.println("Bilgisayara kablosuz baglaniliyor...");
     if (wifiClient.connect(bilgisayar_ip, port)) {
@@ -213,6 +247,7 @@ void loop() {//ESP32 calistigi surece sonsuza kadar doner
     }
   }
   komutlariKontrolEt();
+  */
 
   while (gpsSerial.available() > 0){//eger gps den okunacak veri varsa
     char gpsData = gpsSerial.read();//uydudan gelen karmaşık NMEA metinlerini ("$GPGGA...") harf harf okur, virgülleri sayarak Enlem, Boylam ve Rakım değerlerini cımbızla çekip alır. Değişim varsa bunu doğrudan paketler.
@@ -299,6 +334,18 @@ void loop() {//ESP32 calistigi surece sonsuza kadar doner
       float gercek_gy = (gy / 131.0) - gyroY_offset;
       float gercek_gz = (gz / 131.0) - gyroZ_offset;
 
+
+           // --- PUSULA (HMC5883L) VERİSİNİ OKUMA ---
+      Wire.beginTransmission(MAG_ADDR);
+      Wire.write(0x03); 
+      Wire.endTransmission(false);
+      Wire.requestFrom(MAG_ADDR, 6, true);
+      if(Wire.available() <= 6) {
+        mag_x = (Wire.read() << 8 | Wire.read()); 
+        mag_z = (Wire.read() << 8 | Wire.read()); // HMC5883L sırası X-Z-Y'dir!
+        mag_y = (Wire.read() << 8 | Wire.read()); 
+      }
+
      // --- KAZA VE DÜŞÜŞ ALGILAMA ---
       float toplamG = sqrt(pow(gercek_ax, 2) + pow(gercek_ay, 2) + pow(gercek_az, 2));
       if (toplamG < 0.2) {
@@ -336,6 +383,13 @@ void loop() {//ESP32 calistigi surece sonsuza kadar doner
      
      if (suAn - eskiZaman >= 100) {
      eskiZaman = suAn; // Kronometreyi sıfırla
+     
+      // Pusula (MAG) verisini ekrana bas (Saniyede 10 kere):
+      Serial.print("MAG,");
+      Serial.print(mag_x); Serial.print(",");
+      Serial.print(mag_y); Serial.print(",");
+      Serial.println(mag_z);
+      
      String mpuVeri = "MPU," + 
      String(suAn) + "," +                 // <-- İŞTE BURASI: Zaman damgası eklendi!
      String(gercek_ax, 3) + "," + 
@@ -350,10 +404,11 @@ void loop() {//ESP32 calistigi surece sonsuza kadar doner
      String(yaw, 2) + "\n"; // 11. Endeks olarak Yaw açısı eklendi
 
 
-     wifiClient.print(mpuVeri); // kalibre edilmiş Veriyi kablosuz olarak fırlatıyorum
+     // wifiClient.print(mpuVeri); // Wİ-Fİ İPTAL EDİLDİ
+     Serial.print(mpuVeri); // OFFLINE MOD: Sadece ekrana bas
      } 
     }
   }
-  komutlariKontrolEt();
+  // komutlariKontrolEt(); // Wİ-Fİ İPTAL EDİLDİ
 }
 
