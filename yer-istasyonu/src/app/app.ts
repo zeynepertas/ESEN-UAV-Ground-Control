@@ -20,6 +20,7 @@ export class App implements AfterViewInit {
   angleChart: any;
   accelChart: any;
   gyroChart: any;
+  magChart: any;
 
   ngAfterViewInit_silindi() {
     // I am completely deleting this chunk to fix duplicate function, leaving this blank line.
@@ -67,19 +68,33 @@ export class App implements AfterViewInit {
       },
       options: { responsive: true, animation: false, scales: { x: { display: false } } }
     });
+
+    // 4. Pusula Grafiği
+    this.magChart = new Chart('magChart', {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'Mx', data: [], borderColor: '#a855f7', borderWidth: 1.5, pointRadius: 0 },
+          { label: 'My', data: [], borderColor: '#d946ef', borderWidth: 1.5, pointRadius: 0 },
+          { label: 'Mz', data: [], borderColor: '#c084fc', borderWidth: 1.5, pointRadius: 0 }
+        ]
+      },
+      options: { responsive: true, animation: false, scales: { x: { display: false } } }
+    });
   }
 
   // Canlı veriler her geldiğinde (WebSocket / SSE döngüsünde) bu fonksiyonu çağıracağız:
   grafikleriGuncelle(veri: any) {
     // Eğer grafikler henüz çizilmediyse (sayfa yeni açılıyorsa) hatayı önlemek için bu adımı atla
-    if (!this.angleChart || !this.accelChart || !this.gyroChart) return;
+    if (!this.angleChart || !this.accelChart || !this.gyroChart || !this.magChart) return;
 
     const zamanDamgasi = new Date().toLocaleTimeString();
 
     // Maksimum 20 veri tutarak ekranın kaymasını sağlıyoruz
     const maxVeri = 20;
 
-    [this.angleChart, this.accelChart, this.gyroChart].forEach(chart => {
+    [this.angleChart, this.accelChart, this.gyroChart, this.magChart].forEach(chart => {
       if (chart.data.labels.length > maxVeri) {
         chart.data.labels.shift();
         chart.data.datasets.forEach((ds: any) => ds.data.shift());
@@ -106,6 +121,13 @@ export class App implements AfterViewInit {
     this.gyroChart.data.datasets[1].data.push(veri.gy);
     this.gyroChart.data.datasets[2].data.push(veri.gz);
     this.gyroChart.update('none');
+
+    // Pusula verileri
+    this.magChart.data.labels.push(zamanDamgasi);
+    this.magChart.data.datasets[0].data.push(veri.mx);
+    this.magChart.data.datasets[1].data.push(veri.my);
+    this.magChart.data.datasets[2].data.push(veri.mz);
+    this.magChart.update('none');
   }
 
   // --- SERVİSLERİN İÇE AKTARILMASI (DEPENDENCY INJECTION) ---

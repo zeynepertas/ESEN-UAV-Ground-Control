@@ -1,23 +1,14 @@
 #include <Wire.h>//12c haberlesme kütüphanesi
-#include <WiFi.h>
 #include <math.h>
-
-#include "soc/soc.h"           // Brownout dedektörünü kapatmak için gerekli
-#include "soc/rtc_cntl_reg.h"  // Brownout dedektörünü kapatmak için gerekli
-
-#define RXD2 16
-#define TXD2 17
+#include <SoftwareSerial.h>//GPS iletişimi için sanal seri port kütüphanesi
+#define GPS_RX 8
+#define GPS_TX 9//Yeni GPS Pinleri (Arduino Uno/Nano için):
+SoftwareSerial gpsSerial(GPS_RX, GPS_TX);
 #define GPS_BAUD 9600 //konusma hizi
 
 // Kesme (Interrupt) bayrağı: MPU'dan sinyal geldiğinde bu True olacak
 volatile bool mpuVeriHazir = false;//sensörün "yeni veri var" diye bağırdığı (Interrupt) anlarda tetiklenen bir alarm bayrağı
 
-// ESP32 Wi-Fi ve IP Ayarları dışarıdan (secrets.h) yüklenir.
-#include "secrets.h"
-
-WiFiClient wifiClient;
-
-HardwareSerial gpsSerial(2);//2 numarali port kullanimi gps icin
 String eskiEnlem = "";//onceki degerleri hatirlamak icin hafiza degiskenleri(gps)
 String eskiBoylam = "";
 String eskiRakim = "";
@@ -25,9 +16,12 @@ String eskiUydu = "";
 
 unsigned long eskiZaman = 0; // Kronometre hafızası mpu zamanlayicisi icin
 unsigned long sonFiltreZamani = 0;
+unsigned long sonPusulaZamani = 0;
 float roll = 0.0;
 float pitch = 0.0;
 float yaw = 0.0; // YAW: İHA'nın Z ekseni etrafındaki yönelmesi
+float baslangicYaw = 0.0; // Göreceli pusula için sıfır noktası hafızası
+bool pusulaKalibreEdildi = false;
 
 // --- KALİBRASYON OFFSET DEĞİŞKENLERİ ---
 float gyroX_offset = 0.0, gyroY_offset = 0.0, gyroZ_offset = 0.0;
@@ -36,12 +30,13 @@ float accX_offset = 0.0, accY_offset = 0.0, accZ_offset = 0.0;
 const int MPU_ADDR = 0x68;//mpunun 12c adresi
 int16_t ax, ay, az, gx, gy, gz;//ivme ve jireskop verileri 16 bit
 
-// --- HMC5883L PUSULA TANIMLAMALARI ---
-#define MAG_ADDR 0x1E
-int16_t mag_x, mag_y, mag_z;
+const int MAG_ADDR = 0x1E; // HMC5883L I2C adresi
+int16_t mx = 0, my = 0, mz = 0; // Manyetik alan verileri
+
+
 
 // Fonksiyon prototipi (Derleyiciye önceden haber veriyoruz)
-void IRAM_ATTR mpuISR(){
+void mpuISR(){
   mpuVeriHazir = true; // Sadece bayrağı kaldırıp hemen ana döngüye dönüyoruz
 };
 
@@ -103,13 +98,32 @@ void mpuKalibrasyon() {
 void setup() {//cihaza güç verildiğinde sadece 1 kez çalışır
   //gps setup kodu
   Serial.begin(115200);
-  gpsSerial.begin(GPS_BAUD, SERIAL_8N1, RXD2, TXD2);//gps ve esp koprusu
+  gpsSerial.begin(GPS_BAUD);//gps ve esp koprusu
   Serial.println("Serial 2 started at 9600 baud rate");
 
  //mpu setup kodu
   Wire.begin();//12c haberlesmesi baslar
-  Wire.setTimeOut(150);
+  Wire.setWireTimeout(3000, true); // I2C kilitlenmelerini önlemek için 3 milisaniye zaman aşımı ekle
   Serial.begin(115200);
+
+  // --- MANYETOMETRE (HMC5883L) KURULUMU ---
+  // Çin malı HMC5883L klonlarının donmasını önlemek için Güvenli Başlatma
+  Wire.beginTransmission(MAG_ADDR);
+  Wire.write(0x00); // Config A Register
+  Wire.write(0x70); // 8-örnekleme ortalaması, 15 Hz
+  Wire.endTransmission(true);
+
+  Wire.beginTransmission(MAG_ADDR);
+  Wire.write(0x01); // Config B Register
+  Wire.write(0xA0); // Gain (Kazanç) Ayarı
+  Wire.endTransmission(true);
+
+  Wire.beginTransmission(MAG_ADDR);
+  Wire.write(0x02); // Mod Register (HMC5883L)
+  Wire.write(0x01); // SİNGLE-MEASUREMENT (Tekli Ölçüm) MODU! Kilitlenmeyi kökten çözer.
+  Wire.endTransmission(true);
+  delay(100);
+
   Wire.beginTransmission(MPU_ADDR); //Sensorun kapisini caldik
   Wire.write(0x6B);//register sectik
   Wire.write(1 << 7);//reset attik
@@ -121,13 +135,6 @@ void setup() {//cihaza güç verildiğinde sadece 1 kez çalışır
   Wire.beginTransmission(MPU_ADDR);
   Wire.write(0x6B);     // Tekrar register seç
   Wire.write(0);        // 0 yazarak uykuyu kapat, çalışmaya başla
-  Wire.endTransmission(true);
-
-
-  // --- PUSULA (HMC5883L) UYANDIRMA VE KURULUM ---
-  Wire.beginTransmission(MAG_ADDR); 
-  Wire.write(0x02); // Mode Register 
-  Wire.write(0x00); // Sürekli Ölçüm Modu
   Wire.endTransmission(true);
 
 
@@ -147,8 +154,8 @@ void setup() {//cihaza güç verildiğinde sadece 1 kez çalışır
   mpuKalibrasyon();
 
   // --- INTERRUPT (KESME) TANIMLAMASI ---
-  pinMode(4, INPUT); //gpio 4 pinini giriş olarak ayarladim
- 
+  pinMode(2, INPUT); 
+  attachInterrupt(digitalPinToInterrupt(2), mpuISR, RISING); // SİLİNMEMESİ GEREKEN KOMUT
 
     // MPU6050 Kesme (Interrupt) Ayarları
   Wire.beginTransmission(MPU_ADDR);
@@ -161,44 +168,6 @@ void setup() {//cihaza güç verildiğinde sadece 1 kez çalışır
   Wire.write(0x01); // "Veri Hazır" (Data Ready) kesmesini aktif et
   Wire.endTransmission(true);
 
-
-  // Wİ-Fİ BAĞLANTISI (Buradan sonrası kodunda zaten var)
-  WiFi.disconnect(true, true);
-  // ...
-
-
-// Wİ-Fİ BAĞLANTISI
-  WiFi.disconnect(true, true);
-    delay(1000);
-
-  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // Brownout (Düşük Voltaj) dedektörünü GİZLİCE KAPAT!
-
-  /* --- Wİ-Fİ GEÇİCİ OLARAK İPTAL EDİLDİ (OFFLINE MOD) ---
-  WiFi.mode(WIFI_STA);
-  WiFi.setTxPower(WIFI_POWER_MINUS_1dBm); 
-  WiFi.begin(ssid, password);
-  Serial.print("Wi-Fi'ye baglaniyor");
-  
-  int deneme = 0;
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-    deneme++;
-    if (deneme > 20) { 
-      Serial.println("\nBAĞLANTI BAŞARISIZ OLDU!");
-      break;
-    }
-  }
-  
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWi-Fi Baglandi!");
-  }
-  */
-  Serial.println("\n[SİSTEM] Wi-Fi guc yetmezligi nedeniyle OFFLINE moda gecildi. Sadece Serial'dan veri basilacak.");
-  
-  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 1); // Tehlike geçti, dedektörü geri aç!
-  
-   attachInterrupt(digitalPinToInterrupt(4), mpuISR, RISING); // ESP32'ye "Ne iş yapıyorsan yap, GPIO 4 pinine elektrik geldiği an işi bırak ve mpuISR fonksiyonunu çalıştırarak veri bayrağını kaldır" talimatını verir.
 }
 
 String nmeaSatiri="";//sifirdan baslattik
@@ -206,8 +175,8 @@ String nmeaSatiri="";//sifirdan baslattik
 
 
 void komutlariKontrolEt() {
-  if (wifiClient.available() > 0) {
-    String gelenKomut = wifiClient.readStringUntil('\n');
+  if (Serial.available() > 0) {
+    String gelenKomut = Serial.readStringUntil('\n');
     gelenKomut.trim();
 
     if (gelenKomut.length() > 0) {
@@ -235,19 +204,7 @@ void komutlariKontrolEt() {
 
 
 void loop() {//ESP32 calistigi surece sonsuza kadar doner
-
-  /* --- Wİ-Fİ BAĞLANTISI İPTAL EDİLDİ ---
-  if (!wifiClient.connected()) {//eger pc de baglanti henuz kurulmadiysa ya da koptuysa yeniden baglanmaya calisir
-    Serial.println("Bilgisayara kablosuz baglaniliyor...");
-    if (wifiClient.connect(bilgisayar_ip, port)) {
-      Serial.println("Bilgisayara basariyla baglandi!");
-    } else {
-      delay(2000); // Bağlanamazsa 2 saniye bekleyip tekrar dener
-      return;
-    }
-  }
   komutlariKontrolEt();
-  */
 
   while (gpsSerial.available() > 0){//eger gps den okunacak veri varsa
     char gpsData = gpsSerial.read();//uydudan gelen karmaşık NMEA metinlerini ("$GPGGA...") harf harf okur, virgülleri sayarak Enlem, Boylam ve Rakım değerlerini cımbızla çekip alır. Değişim varsa bunu doğrudan paketler.
@@ -289,7 +246,7 @@ void loop() {//ESP32 calistigi surece sonsuza kadar doner
        if (enlem != eskiEnlem || boylam != eskiBoylam || rakim != eskiRakim || uydu != eskiUydu) {
       // GPS verisini de kablosuz olarak gönderiyoruz
       String gpsVeri = "GPS," + enlem + "," + boylam + "," + rakim + "," + uydu + "\n";
-       wifiClient.print(gpsVeri);
+       Serial.print(gpsVeri);
        eskiEnlem = enlem;
        eskiBoylam = boylam;//ekrana yazdirdiktan sonra yeni degerleri eski olarak kaydettim
        eskiRakim = rakim;
@@ -326,6 +283,37 @@ void loop() {//ESP32 calistigi surece sonsuza kadar doner
    gy = (Wire.read() << 8 | Wire.read());
    gz = (Wire.read() << 8 | Wire.read());
 
+   // --- MANYETOMETRE OKUMASI (Saniyede 10 Kere / 100ms) ---
+   if (suAn - sonPusulaZamani >= 100) {
+       sonPusulaZamani = suAn;
+
+       // 1. Önceki tetiğin sonucunu oku
+       Wire.beginTransmission(MAG_ADDR);
+       Wire.write(0x03); 
+       Wire.endTransmission(true); 
+       
+       Wire.requestFrom(MAG_ADDR, 6, true);
+       if (Wire.available() >= 6) {
+           mx = (Wire.read() << 8 | Wire.read());
+           mz = (Wire.read() << 8 | Wire.read()); 
+           my = (Wire.read() << 8 | Wire.read());
+       }
+
+       // 2. Bir sonraki okuma için yeniden tekli ölçüm tetiği yolla!
+       // Çip ölçümü yapar ve hemen uykuya dalar. I2C hattı ASLA kilitlenmez.
+       Wire.beginTransmission(MAG_ADDR);
+       Wire.write(0x02);
+       Wire.write(0x01); // Single-Measurement
+       Wire.endTransmission(true);
+
+       // --- SIFIR KALİBRASYON (İlk Açılışta Yön Hafızası) ---
+       if (!pusulaKalibreEdildi) {
+           baslangicYaw = atan2(my, mx) * 180 / PI;
+           pusulaKalibreEdildi = true;
+           Serial.println("[PUSULA] Sifir noktasi (Kuzey) ayarlandi!");
+       }
+   }
+
       float gercek_ax = (ax / 16384.0) - accX_offset;//ivme verilerini g cinsine kalibrasyon ediyorum ve hata payını çıkarıyorum
       float gercek_ay = (ay / 16384.0) - accY_offset;
       float gercek_az = (az / 16384.0) - accZ_offset;
@@ -334,17 +322,6 @@ void loop() {//ESP32 calistigi surece sonsuza kadar doner
       float gercek_gy = (gy / 131.0) - gyroY_offset;
       float gercek_gz = (gz / 131.0) - gyroZ_offset;
 
-
-           // --- PUSULA (HMC5883L) VERİSİNİ OKUMA ---
-      Wire.beginTransmission(MAG_ADDR);
-      Wire.write(0x03); 
-      Wire.endTransmission(false);
-      Wire.requestFrom(MAG_ADDR, 6, true);
-      if(Wire.available() <= 6) {
-        mag_x = (Wire.read() << 8 | Wire.read()); 
-        mag_z = (Wire.read() << 8 | Wire.read()); // HMC5883L sırası X-Z-Y'dir!
-        mag_y = (Wire.read() << 8 | Wire.read()); 
-      }
 
      // --- KAZA VE DÜŞÜŞ ALGILAMA ---
       float toplamG = sqrt(pow(gercek_ax, 2) + pow(gercek_ay, 2) + pow(gercek_az, 2));
@@ -367,15 +344,13 @@ void loop() {//ESP32 calistigi surece sonsuza kadar doner
      roll = 0.96 * (roll + gercek_gx * dt) + 0.04 * accRoll;
      pitch = 0.96 * (pitch + gercek_gy * dt) + 0.04 * accPitch;
 
-     // 3. YAW İÇİN ÖLÜ BANT (DEADBAND) FİLTRESİ
-     // Eğer Z eksenindeki dönüş hızı saniyede 1 dereceden küçükse, bunu titreşim/gürültü kabul et ve yoksay (0'a eşitle).
-     // Bu sayede dron masada sabit dururken Yaw açısı yavaş yavaş kaymaz (Sapma/Drift engellenir).
-     if (abs(gercek_gz) < 1.0) {
-         gercek_gz = 0.0;
-     }
-
-     // 4. YAW HESAPLAMA (Jiroskop İntegrali)
-     yaw = yaw + (gercek_gz * dt);
+     // 3. YAW HESAPLAMASI (Manyetometre Üzerinden Göreceli)
+     float mutlakYaw = atan2(my, mx) * 180 / PI;
+     yaw = mutlakYaw - baslangicYaw;
+     
+     // 4. AÇI NORMALİZASYONU (-180 ile +180 arasına sıkıştırma)
+     if (yaw > 180.0) yaw -= 360.0;
+     else if (yaw < -180.0) yaw += 360.0;
 
      // --- YENİ ZAMAN DAMGASI (TIMESTAMP) EKLENTİSİ ---
      // 'suAn' değişkeni paketin hemen başına (MPU'dan sonra) eklendi.
@@ -383,13 +358,6 @@ void loop() {//ESP32 calistigi surece sonsuza kadar doner
      
      if (suAn - eskiZaman >= 100) {
      eskiZaman = suAn; // Kronometreyi sıfırla
-     
-      // Pusula (MAG) verisini ekrana bas (Saniyede 10 kere):
-      Serial.print("MAG,");
-      Serial.print(mag_x); Serial.print(",");
-      Serial.print(mag_y); Serial.print(",");
-      Serial.println(mag_z);
-      
      String mpuVeri = "MPU," + 
      String(suAn) + "," +                 // <-- İŞTE BURASI: Zaman damgası eklendi!
      String(gercek_ax, 3) + "," + 
@@ -401,14 +369,16 @@ void loop() {//ESP32 calistigi surece sonsuza kadar doner
      String(sicaklikC, 2) + ","+
      String(roll, 2) + "," + 
      String(pitch, 2) + "," +
-     String(yaw, 2) + "\n"; // 11. Endeks olarak Yaw açısı eklendi
+     String(yaw, 2) + "," +
+     String(mx) + "," + 
+     String(my) + "," + 
+     String(mz) + "\n"; // Yeni Manyetik veriler eklendi
 
 
-     // wifiClient.print(mpuVeri); // Wİ-Fİ İPTAL EDİLDİ
-     Serial.print(mpuVeri); // OFFLINE MOD: Sadece ekrana bas
+     Serial.print(mpuVeri); // kalibre edilmiş Veriyi kablosuz olarak fırlatıyorum
      } 
     }
   }
-  // komutlariKontrolEt(); // Wİ-Fİ İPTAL EDİLDİ
+  komutlariKontrolEt();
 }
 

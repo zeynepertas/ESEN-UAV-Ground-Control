@@ -55,7 +55,11 @@ def veritabani_hazirla():
             gy REAL,
             gz REAL,
             roll REAL,
-            pitch REAL
+            pitch REAL,
+            yaw REAL,
+            mx REAL,
+            my REAL,
+            mz REAL
         )
     ''')
     # Yaptığımız değişiklikleri (Tablo oluşturmayı) veritabanına kalıcı olarak kaydet (İşlemi onayla).
@@ -150,6 +154,9 @@ def rabbitmq_dinle():
             anlik_veri["roll"] = veri.get("roll", 0)
             anlik_veri["pitch"] = veri.get("pitch", 0)
             anlik_veri["yaw"] = veri.get("yaw", 0)
+            anlik_veri["mx"] = veri.get("mx", 0)
+            anlik_veri["my"] = veri.get("my", 0)
+            anlik_veri["mz"] = veri.get("mz", 0)
 
             # --- VERİTABANINA AKILLI KAYIT SİSTEMİ ---
             # MPU verileri aşırı hızlı akar, saniyede onlarca kez aynı koordinat ve açı gelebilir.
@@ -172,9 +179,8 @@ def rabbitmq_dinle():
                 anlik_veri["yaw"]
             )
             
-            # Eğer şu anki değerler özeti, veritabanına en son kaydettiğimiz özetten FARKLIYSA
-            # (Yani dronun açısı, konumu veya durumu zerrece değiştiyse) o zaman veritabanına yeni satır ekle.
-            if son_kaydedilen_veri != mevcut_ozet:
+            # Karakutu filtrelemesi iptal edildi (Masaüstü testleri için her veri kaydedilecek)
+            if True:
                 conn = sqlite3.connect('ucus_verileri.db', timeout=10)
                 cursor = conn.cursor()
                 
@@ -184,8 +190,8 @@ def rabbitmq_dinle():
                 # INSERT INTO ile SQL Tablosuna yeni bir satır (Karakutu kaydı) ekle.
                 # '?' işaretleri SQL Injection saldırılarını önlemek için güvenli parametre atama yöntemidir.
                 cursor.execute('''
-                    INSERT INTO telemetri (zaman, irtifa, hiz, enlem, boylam, durum, sicaklik, ax, ay, az, gx, gy, gz, roll, pitch, yaw)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO telemetri (zaman, irtifa, hiz, enlem, boylam, durum, sicaklik, ax, ay, az, gx, gy, gz, roll, pitch, yaw, mx, my, mz)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     su_an, 
                     anlik_veri["irtifa"], 
@@ -202,7 +208,10 @@ def rabbitmq_dinle():
                     anlik_veri["gz"],
                     anlik_veri["roll"],
                     anlik_veri["pitch"],
-                    anlik_veri["yaw"]
+                    anlik_veri["yaw"],
+                    anlik_veri["mx"],
+                    anlik_veri["my"],
+                    anlik_veri["mz"]
                 ))
                 conn.commit() # Kaydı onayla
                 conn.close()  # Veritabanını kapat

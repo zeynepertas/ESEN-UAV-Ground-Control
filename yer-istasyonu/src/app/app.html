@@ -66,7 +66,7 @@
     <!-- Alarmlar -->
     @if (baglantiKoptu()) {
       <div class="alert-danger" style="animation: pulse-red 0.5s infinite; background-color: rgba(214, 48, 49, 0.6); color: white; border: 2px solid red; font-weight: bold;">
-        <i class="fas fa-exclamation-triangle"></i> KRİTİK: ESP32 BAĞLANTISI KOPTU!
+        <i class="fas fa-exclamation-triangle"></i> KRİTİK: ARDUİNO BAĞLANTISI KOPTU!
       </div>
     }
 
@@ -178,7 +178,7 @@
 </div>
 
 
-<div class="charts-container" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin-top: 20px;">
+<div class="charts-container" style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 15px; margin-top: 20px;">
   
   <!-- Açı Grafiği (Roll, Pitch, Yaw) -->
   <div class="panel" style="background: #111827; padding: 15px; border-radius: 8px; border: 1px solid #1f2937;">
@@ -196,6 +196,12 @@
   <div class="panel" style="background: #111827; padding: 15px; border-radius: 8px; border: 1px solid #1f2937;">
     <h4 style="color: #f43f5e; margin-bottom: 10px; font-size: 13px;">JİROSKOP (GX / GY / GZ)</h4>
     <canvas id="gyroChart"></canvas>
+  </div>
+
+  <!-- Pusula Grafiği (Mx, My, Mz) -->
+  <div class="panel" style="background: #111827; padding: 15px; border-radius: 8px; border: 1px solid #1f2937;">
+    <h4 style="color: #a855f7; margin-bottom: 10px; font-size: 13px;">PUSULA (MX / MY / MZ)</h4>
+    <canvas id="magChart"></canvas>
   </div>
 
 </div>
@@ -242,6 +248,9 @@
             <th>Yatış (Roll)</th>
             <th>Yunuslama (Pitch)</th>
             <th>Sapma (Yaw)</th>
+            <th>Manyetik X</th>
+            <th>Manyetik Y</th>
+            <th>Manyetik Z</th>
           </tr>
         </thead>
         <tbody>
@@ -264,6 +273,9 @@
               <td class="text-yellow">{{ kayit.roll }}</td>
               <td class="text-yellow">{{ kayit.pitch }}</td>
               <td class="text-yellow">{{ kayit.yaw }}</td>
+              <td style="color: #c084fc;">{{ kayit.mx }}</td>
+              <td style="color: #c084fc;">{{ kayit.my }}</td>
+              <td style="color: #c084fc;">{{ kayit.mz }}</td>
             </tr>
           }
         </tbody>

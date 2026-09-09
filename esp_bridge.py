@@ -1,4 +1,4 @@
-import socket # Ağ üzerinden TCP/IP bağlantısı kurabilmek için gerekli Python çekirdek kütüphanesi
+import serial 
 import threading # Arka planda aynı anda birden fazla işi (dinleme, yollama) yapabilmek için eşzamanlılık (iş parçacığı) kütüphanesi
 import pika # RabbitMQ (Mesaj Kuyruğu) sunucusuna bağlanıp STOMP ve AMQP protokollerini kullanmak için gereken kütüphane
 import json # Verileri ağ üzerinde gönderirken sözlükleri (dictionary) metin formatına (JSON) çevirmek için kütüphane
@@ -25,12 +25,15 @@ anlik_veri = {
     "roll": 0.0,        # Arduino'daki Tamamlayıcı Filtre (Complementary Filter) ile hesaplanan Yatış açısı (Roll)
     "pitch": 0.0,      # Arduino'da hesaplanan Yunuslama açısı (Pitch)
     "zaman_damgasi": 0,
-    "yaw": 0.0
+    "yaw": 0.0,
+    "mx": 0.0,        # HMC5883L'den gelen Manyetik X Ekseni
+    "my": 0.0,        # HMC5883L'den gelen Manyetik Y Ekseni
+    "mz": 0.0         # HMC5883L'den gelen Manyetik Z Ekseni
 }
 
 # ESP32'nin TCP üzerinden bize bağlanıp bağlamadığını tutan değişken.
 # Eğer bağlıysa (soket açıksa), bu değişken üzerinden ESP'ye komut (Örn: "TAKEOFF\n") fırlatacağız.
-aktif_soket_baglantisi = None
+aktif_seri_baglanti = None
 
 def nmea_to_decimal(nmea_str):
     """
@@ -81,7 +84,7 @@ def rabbitmq_komut_dinleyici():
     RabbitMQ'ya düşen mesajları yakalayarak ESP32'ye iletir.
     """
     # Ana programdaki küresel değişkenleri (socket bağlantısı ve anlık veriyi) kullanacağımızı belirtiyoruz
-    global aktif_soket_baglantisi, anlik_veri
+    global aktif_seri_baglanti
     
     while True: # Sunucu çökerse veya bağlantı koparsa pes etmemek için sonsuz bir ana döngü
         try:
@@ -95,7 +98,7 @@ def rabbitmq_komut_dinleyici():
 
             def komut_geldi(ch, method, properties, body):
                 # Bu alt fonksiyon (callback), RabbitMQ'ya bir mesaj düştüğü an otomatik tetiklenir
-                global aktif_soket_baglantisi, anlik_veri
+                global aktif_seri_baglanti, anlik_veri
                 
                 # Gelen mesajın gövdesini (body), bytes (byte dizisi) halinden alıp
                 # json.loads ile Python'un anlayacağı sözlük (dict) formatına çeviriyoruz.
@@ -125,19 +128,19 @@ def rabbitmq_komut_dinleyici():
                 
                 # --- KOMUTUN DRONA (ESP32) İLETİLMESİ ---
                 # Eğer TCP soketi üzerinden bağlanmış aktif bir ESP32 donanımımız varsa:
-                if aktif_soket_baglantisi:
+                if aktif_seri_baglanti:
                     try:
                         # Arduino kodunda "readStringUntil('\n')" kullandığımız için,
                         # komutun sonuna mutlaka \n (Alt Satıra Geç - New Line) karakteri ekliyoruz!
                         mesaj = f"{komut}\n"
                         # Python'daki metinleri ağa (TCP) gönderirken byte formatına (UTF-8) çevirmemiz (encode) şarttır.
-                        aktif_soket_baglantisi.sendall(mesaj.encode('utf-8'))
+                        aktif_seri_baglanti.write(mesaj.encode('utf-8'))
                         print(f"  -> ESP32'ye başarıyla iletildi.")
                     except Exception as e:
                         # Eğer ESP32 menzilden çıktıysa, Wi-Fi koptuysa veya bataryası bittiyse hata verecektir
                         print(f"  -> ESP32'ye iletilirken hata: {e}")
                         # Bağlantı fiziksel olarak koptuğu için aktif soketi None (Yok) yapıyoruz
-                        aktif_soket_baglantisi = None 
+                        aktif_seri_baglanti = None
                 else:
                     # Soket bağlı değilse (ESP açık değilse) komutun heba olduğunu kullanıcıya bildiriyoruz
                     print("  -> Uyarı: ESP32 henüz bağlı değil, arayüzden gelen komut çöpe gitti!")
@@ -160,7 +163,7 @@ def rabbitmq_telemetri_gonderici():
     Görevi: ESP32'den gelen ve 'anlik_veri' sözlüğünde güncellenen 
     sensör değerlerini her saniyede bir paketleyip RabbitMQ üzerinden Arayüze ve Veritabanı API'sine yaymaktır (Broadcasting).
     """
-    global anlik_veri, aktif_soket_baglantisi
+    global aktif_seri_baglanti
     while True: # RabbitMQ kapanırsa pes etmemesi için sonsuz dış döngü
         try:
             # RabbitMQ sunucusuna bağlanmak için Pika bağlantısı kur
@@ -173,7 +176,7 @@ def rabbitmq_telemetri_gonderici():
             
             while True: # Bağlantı kurulduğunda sürekli olarak veri basacağımız iç döngü
                 # Eğer ESP32 bağlı değilse arayüze eski verileri SPAM yapmayı durdur (Böylece Angular'daki Watchdog devreye girsin!)
-                if aktif_soket_baglantisi is None:
+                if aktif_seri_baglanti is None:
                     time.sleep(1)
                     continue
                 
@@ -197,7 +200,10 @@ def rabbitmq_telemetri_gonderici():
                     "sicaklik": round(anlik_veri["sicaklik"], 2),
                     "roll": round(anlik_veri["roll"], 2),
                     "pitch": round(anlik_veri["pitch"], 2),
-                    "yaw": round(anlik_veri["yaw"], 2)
+                    "yaw": round(anlik_veri["yaw"], 2),
+                    "mx": anlik_veri["mx"],
+                    "my": anlik_veri["my"],
+                    "mz": anlik_veri["mz"]
                 }
                 
                 # Elde ettiğimiz bu temiz sözlüğü JSON (metin tabanlı veri formatı) dosyasına çeviriyoruz.
@@ -222,138 +228,55 @@ def rabbitmq_telemetri_gonderici():
             print(f"[RabbitMQ] Telemetri Gönderici Hatası: {e}. 5 saniye sonra tekrar denenecek...")
             time.sleep(5)
 
-def tcp_sunucu_baslat():
-    """
-    Bu fonksiyon Python programının kalbidir (Ana Thread).
-    Görevleri:
-    1. Bilgisayarda bir TCP/IP Portu (Kapısı) açmak.
-    2. ESP32'nin Wi-Fi üzerinden bu kapıya gelip bağlanmasını beklemek (Listening).
-    3. Bağlandıktan sonra ESP'den akan metin verilerini (GPS ve MPU) saniyede yüzlerce kez durmadan okumak.
-    """
-    global anlik_veri, aktif_soket_baglantisi
+def seri_port_dinle():
+    global anlik_veri, aktif_seri_baglanti
     
-    # TCP soketi oluşturuluyor. 
-    # AF_INET -> IPv4 adreslemesini (192.168... gibi) kullan. 
-    # SOCK_STREAM -> Veri garantili TCP protokolünü kullan (Kayıpsız veri aktarımı).
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    
-    # SO_REUSEADDR parametresi: Eğer programı Ctrl+C ile kapatıp hızlıca tekrar açarsan, 
-    # işletim sistemi "Bu port hala meşgul!" demez, portu zorla tekrar sana tahsis eder.
-    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    
-    host = '0.0.0.0' # 0.0.0.0 demek, bilgisayarın sahip olduğu TÜM ağ bağdaştırıcılarını (Wi-Fi, Ethernet vb.) dinle demektir.
-    port = 5001      # Arduino'daki wifiClient.connect(..., 5001) kodundaki hedef kapı numarası.
-    
-    # Soketi belirttiğimiz IP ve Port'a bağlıyoruz.
-    server_socket.bind((host, port))
-    
-    # Gelen bağlantı isteklerini sıraya dizip dinlemeye başlıyoruz. (1 parametresi: Aynı anda kuyrukta 1 bağlantı bekleyebilir)
-    server_socket.listen(1)
-    print(f"[TCP Sunucu] {port} portunda ESP32'nin bağlanması bekleniyor...")
-    
-    while True: # Bir ESP32 bağlansa, sonra kopsa bile sunucu kapanmasın, yeni bir bağlantı beklesin diye dış döngü.
-        
-        # server_socket.accept() programı burada kilitler (bloke eder)! 
-        # Ta ki ESP32 Wi-Fi üzerinden "Ben geldim" diyene kadar program alt satıra geçmez.
-        client_socket, addr = server_socket.accept() 
-        
-        # Eğer ESP32'nin gücü aniden kesilirse (USB çekilirse), recv() komutu sonsuza kadar kilitlenmesin diye 
-        # 2 saniyelik bir zaman aşımı (timeout) koyuyoruz. ESP32 zaten saniyede 10 kere veri yolladığı için 2 saniye sessizlik koptuğu anlamına gelir.
-        client_socket.settimeout(2.0)
-        
-        # Biri bağlandığı anda kilit açılır. Bağlanan cihazın IP adresi (addr) ekrana basılır.
-        print(f"[TCP Sunucu] ESP32 Başarıyla Bağlandı! Gelen Adres: {addr}")
-        
-        # Yeniden bağlandığında daha önceden 'KOPTU' kalan durumu normale döndür
-        anlik_veri["durum"] = "NORMAL"
-        
-        # Yukarıda komut gönderici fonksiyonumuz ESP32'ye mesaj atabilsin diye, 
-        # bu yeni kurulan sağlam köprüyü (soketi) global değişkene kopyalıyoruz.
-        aktif_soket_baglantisi = client_socket 
-        
+    # Kendi bilgisayarındaki porta göre COM3, COM4 vb. olarak değiştir
+    port = "COM4" 
+    baud_rate = 115200
+
+    while True:
         try:
-            buffer = "" # ESP32'den gelen byte'ları parça parça biriktireceğimiz geçici havuz (tampon bellek)
-            
-            while True: # ESP32 bağlı kaldığı sürece sonsuza kadar dönecek iç okuma döngüsü
-                
-                # recv(1024) -> Ağ kartından maksimum 1024 byte (karakter) veriyi çek (oku). 
-                data = client_socket.recv(1024)
-                
-                if not data: 
-                    # Eğer data değişkeni boş (null/empty) dönerse, bu TCP protokolünde karşı tarafın (ESP32)
-                    # fiziksel olarak bağlantıyı kapattığı, koptuğu veya elektriğinin kesildiği anlamına gelir.
-                    print("[TCP Sunucu] ESP32 bağlantıyı kapattı (Wi-Fi koptu veya cihaz resetlendi).")
-                    anlik_veri["durum"] = "BAGLANTI KOPTU"
-                    break # İç döngüyü kırıp dış döngüye dön (Yeniden bağlanmasını bekle)
-                    
-                # Gelen veriler ağda 'bytes' (010101) formatındadır. 
-                # decode('utf-8') ile bunu insanların ve Python'un okuyabileceği String (metin) formatına çeviriyoruz.
-                # Çevrilen metni havuzun sonuna ekliyoruz (buffer +=).
-                buffer += data.decode('utf-8')
-                
-                # Arduino kodunda verileri yollarken wifiClient.print("...\n") şeklinde yolladık.
-                # Yani her bir tam mesajın (satırın) sonuna "Alt Satıra Geç" (\n) karakteri (Enter tuşu) ekledik.
-                # Eğer havuzda bir '\n' harfi varsa, demek ki ESP32 tam bir cümle söylemiştir.
-                while '\n' in buffer:
-                    # split('\n', 1) komutu metni bulduğu ilk '\n' karakterinden tam ikiye böler.
-                    # 1. parça (line): Tamamlanmış cümle.
-                    # 2. parça (buffer): Cümlenin devamında yanlışlıkla gelmiş yarım kelimeler (yeni havuza aktarılır).
-                    line, buffer = buffer.split('\n', 1)
-                    
-                    # Cümlenin başındaki ve sonundaki fazladan görünmez boşlukları (space, \r) temizle
-                    line = line.strip() 
-                    
-                    # Eğer gelen tam cümlenin başı "GPS," ile başlıyorsa, bu bir Konum bilgisidir.
+            print(f"[Seri Port] {port} portuna bağlanmaya çalışılıyor...")
+            ser = serial.Serial(port, baud_rate, timeout=2.0)
+            aktif_seri_baglanti = ser
+            print(f"[Seri Port] Bağlantı Başarılı! {port} dinleniyor...")
+            anlik_veri["durum"] = "NORMAL"
+
+            while True:
+                if ser.in_waiting > 0:
+                    # Satırı oku ve boşlukları temizle
+                    line = ser.readline().decode('utf-8', errors='ignore').strip()
+                    if not line:
+                        anlik_veri["durum"] = "SENSÖR DONDU"
+                        continue
+                    else:
+                        if anlik_veri["durum"] == "SENSÖR DONDU":
+                            anlik_veri["durum"] = "NORMAL"
+
+                    # Eski TCP okuma mantığının aynısı
                     if line.startswith("GPS,"):
-                        print(f"[ESP32 -> TCP Sunucu] GPS Verisi Alındı: {line}")
-                        
-                        # Cümleyi virgüllerden (,) keserek bir kelime dizisi (liste) oluştur.
-                        # Örnek: ["GPS", "3953.500", "03248.100", "120.5", "8"]
+                        print(f"[Seri Port] GPS: {line}")
                         parcalar = line.split(",")
-                        
-                        # Listede en az 4 parça (GPS, Enlem, Boylam, Rakım vb.) olduğundan emin ol (Eksik veri kontrolü)
                         if len(parcalar) >= 4:
-                            ham_enlem = parcalar[1]
-                            ham_boylam = parcalar[2]
-                            ham_rakim = parcalar[3]
-                            
-                            # Eğer enlem ve boylam metinleri boş değilse
+                            ham_enlem, ham_boylam, ham_rakim = parcalar[1], parcalar[2], parcalar[3]
                             if ham_enlem and ham_boylam:
-                                # Yukarıda yazdığımıznmea_to_decimal fonksiyonu ile NMEA koordinatlarını ondalığa çevir.
                                 n_enlem = nmea_to_decimal(ham_enlem)
                                 n_boylam = nmea_to_decimal(ham_boylam)
-                                
-                                # Cihaz evin içindeyse veya GPS henüz uydu bulamadıysa koordinat 0.0 döner.
-                                # Eğer koordinat 0.0 DEĞİLSE, yani gerçek bir konum bulduysa küresel veriye kaydet.
-                                # (Bunu yapmazsak arayüzdeki harita sürekli Afrika kıyılarına (0,0 noktasına) zıplar).
                                 if n_enlem != 0.0 and n_boylam != 0.0:
                                     anlik_veri["enlem"] = n_enlem
                                     anlik_veri["boylam"] = n_boylam
-                                
                                 try:
-                                    # Rakım değerini metinden kesirli sayıya (float) çevirip irtifa olarak kaydet
                                     if ham_rakim and float(ham_rakim) > 0:
                                         anlik_veri["irtifa"] = float(ham_rakim)
                                 except:
-                                    pass # Çevirirken harf vs. çıkarsa hatayı görmezden gel, irtifa eski halinde kalsın
-                                    
-                    # Eğer gelen cümlenin başı "MPU," ile başlıyorsa, bu Denge/Sensör (İvme, Jiroskop, Açı) bilgisidir.
+                                    pass
+
                     elif line.startswith("MPU,"):
-                        # Saniyede 10 kere geldiği için ekranı çok doldurabilir ama hata ayıklama için yazdırıyoruz.
-                        print(f"[ESP32 -> TCP Sunucu] MPU Sensör Verisi Alındı: {line}")
-                        
-                        # Yine virgüllerden kesiyoruz
                         parcalar = line.split(",")
-                        
-                        # MPU'dan (Başlık, ax, ay, az, gx, gy, gz, sıcaklık, roll, pitch) olmak üzere 10 parça bekliyoruz.
-                        # Ama 8 parça gelse bile çökmeyip okuması için en az 8 şartı koyuyoruz.
-                        # Artık paketin 1. sırasında Zaman Damgası var. Toplam 12 parça bekliyoruz.
-                        if len(parcalar) >= 12: 
+                        if len(parcalar) >= 15: 
                             try:
-                                # 1. index artık Zaman Damgası (Timestamp)
                                 anlik_veri["zaman_damgasi"] = int(parcalar[1])
-                                
-                                # Diğer tüm veriler 1 indis sağa kaydı (2'den başlıyor)
                                 anlik_veri["ax"] = float(parcalar[2])
                                 anlik_veri["ay"] = float(parcalar[3])
                                 anlik_veri["az"] = float(parcalar[4])
@@ -364,21 +287,17 @@ def tcp_sunucu_baslat():
                                 anlik_veri["roll"] = float(parcalar[9])  
                                 anlik_veri["pitch"] = float(parcalar[10])
                                 anlik_veri["yaw"] = float(parcalar[11]) 
+                                anlik_veri["mx"] = float(parcalar[12])
+                                anlik_veri["my"] = float(parcalar[13])
+                                anlik_veri["mz"] = float(parcalar[14])
                             except Exception as e:
-                                # Eğer Arduino yanlışlıkla "MPU, 1.2.3.4, a" gibi bozuk veya çevrilemeyen 
-                                # bir sayı yollarsa program patlamasın diye hatayı yakala
-                                print(f"MPU Ayrıştırma Hatası (Bozuk Veri): {e}")
-                                
-        except Exception as e:
-            # Okuma döngüsü esnasında beklenmeyen çok büyük bir hata çıkarsa buraya düşer.
-            print(f"[TCP Sunucu] Bağlantı esnasında beklenmeyen hata: {e}")
+                                print(f"Ayrıştırma Hatası: {e}")
+
+        except serial.SerialException as e:
+            print(f"[Seri Port] Hata: {e}")
             anlik_veri["durum"] = "BAGLANTI KOPTU"
-        finally:
-            # Ne olursa olsun (İster ESP32 kopsun, ister kod hata versin, ister döngü kırılsın)
-            # çıkarken (finally blogu) soketi temiz bir şekilde işletim sistemine geri iade et (close).
-            client_socket.close()
-            # Artık bağlı bir cihaz olmadığı için değişkeni None yap ki komut göndermeye çalışmayalım.
-            aktif_soket_baglantisi = None
+            aktif_seri_baglanti = None
+            time.sleep(3)
 
 # Python scripti terminalden (python esp_bridge.py) çalıştırıldığında işletilecek ana komut bloğu.
 if __name__ == "__main__":
@@ -391,4 +310,4 @@ if __name__ == "__main__":
     
     # 3. İş Parçacığı (Ana (Main) Thread): Ana gövde olarak TCP Sunucusunu çalıştırıp ESP32'yi beklesin.
     # Bu fonksiyon sonsuz bir döngüde olduğu için program burada kilitlenir ve asla kendi kendine kapanmaz.
-    tcp_sunucu_baslat()
+    seri_port_dinle()
