@@ -67,8 +67,13 @@ export class TelemetriService {
             // BehaviorSubject kanalımıza "Yeni veri var, içindeki eski veriyi bununla değiştir ve abonelere haber ver!" diyoruz. (.next())
             this.veriKaynagi.next(veri);
             
-            // Karakutu kanalına "Boş bir sinyal (tetik)" çakıyoruz. Karakutu bunu duyunca API'den geçmiş verileri tekrar çekecek.
-            this.karakutuSubject.next();
+            // DİKKAT: Karakutu kanalına saniyede 50 kere tetik çakarsak, tarayıcı saniyede 50 HTTP isteği atıp donar!
+            // Bu yüzden "Sadece saniyede 1 kere" tetik çakmasını (Throttle) sağlıyoruz. RAM ve CPU kurtarıldı!
+            const suAn = Date.now();
+            if (suAn - (this as any)._sonKarakutuZamani > 1000 || !(this as any)._sonKarakutuZamani) {
+              (this as any)._sonKarakutuZamani = suAn;
+              this.karakutuSubject.next();
+            }
         }
       });
     };
