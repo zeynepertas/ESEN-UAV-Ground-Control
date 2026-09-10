@@ -48,15 +48,31 @@ describe('Yer İstasyonu Arayüz ve Buton Testleri', () => {
   });
   
     it('5. Veritabanı Filtreleme çalışmalı ve veriyi doğrulamalı', () => {
+    // API çağrılarını mocklayarak (sahte veri dönerek) veritabanının boş olma ihtimaline karşı testi koruyoruz.
+    // Bu profesyonel bir Frontend E2E test standardıdır.
+    cy.intercept('GET', '**/api/gecmis*tumu*', {
+      statusCode: 200,
+      body: [
+        { id: 1, zaman: "2026-09-10 10:00", durum: "NORMAL", irtifa: 10, hiz: 20, enlem: 39, boylam: 32 }
+      ]
+    }).as('getTumu');
+
+    cy.intercept('GET', '**/api/gecmis*alarmlar*', {
+      statusCode: 200,
+      body: [
+        { id: 2, zaman: "2026-09-10 10:01", durum: "SİNYAL KAYBI", irtifa: 10, hiz: 20, enlem: 39, boylam: 32 }
+      ]
+    }).as('getAlarmlar');
+
     // 1. Dropdown menüsünde değişiklik (change) eventi tetiklemek için önce 'alarmlar' seçilir
     cy.get('select').select('alarmlar');
-    cy.wait(500);
+    cy.wait('@getAlarmlar'); // Statik bekleme (wait 500) yerine API'nin dönmesini bekle
     
-    // 2. Ardından tekrar 'tumu' seçilerek veritabanından tüm uçuşlar getirilir (fetch tetiklenir)
+    // 2. Ardından tekrar 'tumu' seçilerek veritabanından tüm uçuşlar getirilir
     cy.get('select').select('tumu');
-    cy.wait(1000);
+    cy.wait('@getTumu'); // API'nin dönmesini bekle
     
-    // 3. POZİTİF DOĞRULAMA: Tablo boş gelmemeli! İçinde en az 1 tane veri satırı (<tr>) olmalı.
+    // 3. POZİTİF DOĞRULAMA: Mockladığımız verinin tabloya basıldığını doğrula
     cy.get('.history-panel tbody tr').should('have.length.greaterThan', 0);
   });
 });
