@@ -107,28 +107,35 @@ class RabbitMQListener:
         threading.Thread(target=self._listen_loop, daemon=True).start()
 
     def _listen_loop(self):
-        connection = pika.BlockingConnection(pika.URLParameters(RABBITMQ_URL))
-        channel = connection.channel()
-        channel.queue_declare(queue='telemetri_kuyrugu', durable=True)
-        channel.queue_declare(queue='acil_durum', durable=True)
-
-        def callback(ch, method, properties, body):
+        while True:
             try:
-                veri = json.loads(body)
-                self._update_current_data(veri)
-                
-                # Veritabanına kaydet
-                self.db_manager.insert_telemetry(self.anlik_veri)
-                print(f"[Karakutu] Veri Kaydedildi: {self.anlik_veri}")
-                
-                # Geofencing ve Acil Durum Kontrolü
-                self._check_geofence(ch)
-                
-            except Exception as e:
-                print("Veri okuma hatası:", e)
+                connection = pika.BlockingConnection(pika.URLParameters(RABBITMQ_URL))
+                channel = connection.channel()
+                channel.queue_declare(queue='telemetri_kuyrugu', durable=True)
+                channel.queue_declare(queue='acil_durum', durable=True)
 
-        channel.basic_consume(queue='telemetri_kuyrugu', on_message_callback=callback, auto_ack=True)
-        channel.start_consuming()
+                def callback(ch, method, properties, body):
+                    try:
+                        veri = json.loads(body)
+                        self._update_current_data(veri)
+                        
+                        # Veritabanına kaydet
+                        self.db_manager.insert_telemetry(self.anlik_veri)
+                        print(f"[Karakutu] Veri Kaydedildi: {self.anlik_veri}")
+                        
+                        # Geofencing ve Acil Durum Kontrolü
+                        self._check_geofence(ch)
+                        
+                    except Exception as e:
+                        print("Veri okuma hatası:", e)
+
+                channel.basic_consume(queue='telemetri_kuyrugu', on_message_callback=callback, auto_ack=True)
+                print("[Karakutu] RabbitMQ'ya bağlanıldı, telemetri dinleniyor...")
+                channel.start_consuming()
+            except Exception as e:
+                print(f"[Karakutu] RabbitMQ Bağlantısı Koptu (Hata: {e}). 5 saniye sonra yeniden denenecek...")
+                import time
+                time.sleep(5)
 
     def _update_current_data(self, veri):
         keys = ["irtifa", "hiz", "enlem", "boylam", "durum", "sicaklik", 

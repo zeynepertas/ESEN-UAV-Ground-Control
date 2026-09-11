@@ -342,14 +342,25 @@ void loop() {
        if (yaw > 180.0) yaw -= 360.0;
        else if (yaw < -180.0) yaw += 360.0;
        
+       // --- YERÇEKİMİNİ DİNAMİK OLARAK SİLME (LİNEER İVME HESAPLAMASI) ---
+       // Euler açılarını (Roll ve Pitch) kullanarak yerçekimi vektörünü 3 eksende hesaplıyoruz
+       float grav_x = sin(pitch * PI / 180.0);
+       float grav_y = -sin(roll * PI / 180.0) * cos(pitch * PI / 180.0);
+       float grav_z = cos(roll * PI / 180.0) * cos(pitch * PI / 180.0);
+
+       // Ham ivmeden yerçekimi vektörünü çıkararak sadece uçağın "Gerçek/Lineer İvmesini" buluyoruz
+       float lineer_ax = gercek_ax - grav_x;
+       float lineer_ay = gercek_ay - grav_y;
+       float lineer_az = gercek_az - grav_z;
+
        if (suAn - eskiZaman >= 20) {
            eskiZaman = suAn; 
 
            Serial.print("MPU,");
            Serial.print(suAn);            Serial.print(",");
-           Serial.print(gercek_ax, 3);    Serial.print(",");
-           Serial.print(gercek_ay, 3);    Serial.print(",");
-           Serial.print(gercek_az, 3);    Serial.print(",");
+           Serial.print(lineer_ax, 3);    Serial.print(",");
+           Serial.print(lineer_ay, 3);    Serial.print(",");
+           Serial.print(lineer_az, 3);    Serial.print(",");
            Serial.print(gercek_gx, 2);    Serial.print(",");
            Serial.print(gercek_gy, 2);    Serial.print(",");
            Serial.print(gercek_gz, 2);    Serial.print(",");
