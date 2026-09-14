@@ -331,7 +331,12 @@ void loop() {
 
        roll = 0.96 * (roll + gercek_gx * dt) + 0.04 * accRoll;
        pitch = 0.96 * (pitch + gercek_gy * dt) + 0.04 * accPitch;
-
+       // --- NaN KORUMASI (OTONOM KURTARMA) ---
+       if (isnan(roll) || isnan(pitch)) {
+           roll = 0.0;
+           pitch = 0.0;
+       }
+       
        // --- 1. HARD-IRON (SABİT MIKNATISLANMA) TEMİZLİĞİ ---
        float cal_mx = mx - magX_offset;
        float cal_my = my - magY_offset;
