@@ -7,7 +7,6 @@
 #define GPS_TX 9
 SoftwareSerial gpsSerial(GPS_RX, GPS_TX);
 #define GPS_BAUD 9600 
-
 #define SDA_PIN A4
 #define SCL_PIN A5
 
@@ -30,9 +29,11 @@ unsigned long eskiZaman = 0;
 unsigned long sonFiltreZamani = 0;
 unsigned long sonPusulaZamani = 0;
 
-float roll = 0.0, pitch = 0.0, yaw = 0.0; 
-float baslangicYaw = 0.0; 
-bool pusulaKalibreEdildi = false;
+float roll = 0.0, pitch = 0.0, yaw = 0.0;  
+// Pusula Kalibrasyon (Hard-Iron) Offset Değerleri
+float magX_offset = 78.5; 
+float magY_offset = -15.5;
+float magZ_offset = 27.5;
 
 float gyroX_offset = 0.0, gyroY_offset = 0.0, gyroZ_offset = 0.0;
 float accX_offset = 0.0, accY_offset = 0.0, accZ_offset = 0.0;
@@ -46,7 +47,7 @@ void mpuISR(){
   mpuVeriHazir = true; 
 }
 
-// --- I2C BUS CLEAR (KALP MASAJI) ALGORİTMASI ---
+// --- I2C BUS CLEAR ALGORİTMASI ---
 void I2C_ClearBus() {
   Wire.end();
   pinMode(SDA_PIN, INPUT_PULLUP);
@@ -307,11 +308,6 @@ void loop() {
            Wire.write(0x02);
            Wire.write(0x01); 
            Wire.endTransmission(true);
-
-           if (!pusulaKalibreEdildi) {
-               baslangicYaw = atan2(my, mx) * 180 / PI;
-               pusulaKalibreEdildi = true;
-           }
        }
 
        float gercek_ax = (ax / 16384.0) - accX_offset;
@@ -322,7 +318,7 @@ void loop() {
        float gercek_gy = (gy / 131.0) - gyroY_offset;
        float gercek_gz = (gz / 131.0) - gyroZ_offset;
 
-       float toplamG = sqrt(pow(gercek_ax, 2) + pow(gercek_ay, 2) + pow(gercek_az, 2));
+       float toplamG = sqrt((gercek_ax * gercek_ax) + (gercek_ay * gercek_ay) + (gercek_az * gercek_az));
        if (toplamG < 0.2) {
          strncpy(aktifUcusModu, "FREE_FALL", sizeof(aktifUcusModu)-1);
        }
@@ -330,15 +326,36 @@ void loop() {
          strncpy(aktifUcusModu, "CRASH", sizeof(aktifUcusModu)-1);
        }
 
-       float accRoll = atan(gercek_ay / (sqrt(pow(gercek_ax, 2) + pow(gercek_az, 2))+0.0001)) * 180 / PI;
-       float accPitch = atan(-1 * gercek_ax / (sqrt(pow(gercek_ay, 2) + pow(gercek_az, 2))+0.0001)) * 180 / PI;
+       float accRoll = atan(gercek_ay / (sqrt((gercek_ax * gercek_ax) + (gercek_az * gercek_az))+0.0001)) * 180 / PI;
+       float accPitch = atan(-1 * gercek_ax / (sqrt((gercek_ay * gercek_ay) + (gercek_az * gercek_az))+0.0001)) * 180 / PI;
 
        roll = 0.96 * (roll + gercek_gx * dt) + 0.04 * accRoll;
        pitch = 0.96 * (pitch + gercek_gy * dt) + 0.04 * accPitch;
 
-       float mutlakYaw = atan2(my, mx) * 180 / PI;
-       yaw = mutlakYaw - baslangicYaw;
+       // --- 1. HARD-IRON (SABİT MIKNATISLANMA) TEMİZLİĞİ ---
+       float cal_mx = mx - magX_offset;
+       float cal_my = my - magY_offset;
+       float cal_mz = mz - magZ_offset;
+
+       // --- 2. EĞİKLİK TELAFİSİ (TILT COMPENSATION) ---
+       float rollRad = roll * PI / 180.0;
+       float pitchRad = pitch * PI / 180.0;
+
+       float cosRoll = cos(rollRad);
+       float sinRoll = sin(rollRad);
+       float cosPitch = cos(pitchRad);
+       float sinPitch = sin(pitchRad);
+
+       // Pusulayı sanal olarak yere paralel hale getiriyoruz
+       float Xh = cal_mx * cosPitch + cal_mz * sinPitch;
+       float Yh = cal_mx * sinRoll * sinPitch + cal_my * cosRoll - cal_mz * sinRoll * cosPitch;
+
+       // --- 3. GERÇEK KUZEY (TRUE NORTH) HESAPLAMASI ---
+       yaw = atan2(Yh, Xh) * 180.0 / PI;
        
+       // Türkiye için yaklaşık +5.5 derece Manyetik Sapma (Magnetic Declination) eklenir
+       yaw += 5.5; 
+    
        if (yaw > 180.0) yaw -= 360.0;
        else if (yaw < -180.0) yaw += 360.0;
        
@@ -353,7 +370,7 @@ void loop() {
        float lineer_ay = gercek_ay - grav_y;
        float lineer_az = gercek_az - grav_z;
 
-       if (suAn - eskiZaman >= 20) {
+       if (suAn - eskiZaman >= 100) {
            eskiZaman = suAn; 
 
            Serial.print("MPU,");
@@ -377,13 +394,21 @@ void loop() {
         // --- SENSÖR KİLİTLENDİ (OKUMA BAŞARISIZ) ---
         mpuHataSayaci++;
         if (mpuHataSayaci > 5) {
-            Serial.println("[BİLGİ] MPU6050 Kilitlendi! Otonom Kurtarma (Kalp Masaji) Uygulaniyor...");
-            I2C_ClearBus(); // Hattı elektriksel olarak temizle
+            Serial.println("[BİLGİ] MPU6050 Kilitlendi (I2C Hata)! Otonom Kurtarma (Kalp Masaji) Uygulaniyor...");
+            I2C_ClearBus(); 
             delay(10);
-            mpuKurulum();   // Sensörü uykudan uyandır ve ayarlarını geri yükle
+            mpuKurulum();   
             mpuHataSayaci = 0;
             Serial.println("[BİLGİ] MPU6050 Yeniden Baslatildi ve Ucus Kurtarildi!");
         }
     }
+  } else if (millis() - sonFiltreZamani > 500) {
+      // SENSÖR TAMAMEN DONDU, KESME (INTERRUPT) SİNYALİ ÜRETMİYOR!
+      Serial.println("[BİLGİ] MPU6050'den Sinyal Kesildi (Interrupt Dondu)! Acil Kurtarma Uygulaniyor...");
+      I2C_ClearBus(); 
+      delay(10);
+      mpuKurulum();
+      sonFiltreZamani = millis(); // Bekleme sayacını sıfırla ki ard arda reset atmasın
+      Serial.println("[BİLGİ] MPU6050 Hayata Döndürüldü!");
   }
 }

@@ -5,8 +5,6 @@ import sys
 print("======================================================")
 print(" 🚀 ESEN UAV - BÜTÜNLEŞİK BACKEND BAŞLATICI (WRAPPER)")
 print("======================================================")
-print("Yöneticinin talebi üzerine Flask API ve Arduino Köprüsü")
-print("tek bir terminal üzerinden eşzamanlı başlatılıyor...\n")
 
 try:
     # 1. Flask API (app.py) dosyasını arka planda ayrı bir alt süreç (subprocess) olarak başlat
