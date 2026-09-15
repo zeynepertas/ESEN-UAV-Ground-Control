@@ -4,7 +4,49 @@ import pika
 import json
 import time
 import traceback
+import sys
+import os
+from datetime import datetime
 from config import RABBITMQ_URL
+
+class DualLogger:
+    def __init__(self):
+        log_dir = "logs"
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+        filename = os.path.join(log_dir, f"terminal_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+        self.file = open(filename, "a", encoding="utf-8")
+        self.is_new_line = True
+        
+    def write(self, message):
+        if not message:
+            return
+        
+        parts = message.split('\n')
+        for i, part in enumerate(parts):
+            if i > 0:
+                sys.__stdout__.write('\n')
+                self.file.write('\n')
+                self.is_new_line = True
+                
+            if part:
+                if self.is_new_line:
+                    ts = datetime.now().strftime("[%H:%M:%S] ")
+                    sys.__stdout__.write(ts)
+                    self.file.write(ts)
+                    self.is_new_line = False
+                sys.__stdout__.write(part)
+                self.file.write(part)
+                
+        self.file.flush()
+        sys.__stdout__.flush()
+
+    def flush(self):
+        sys.__stdout__.flush()
+        self.file.flush()
+
+# Tüm print komutlarını hem terminale hem de log dosyasına yönlendiriyoruz
+sys.stdout = DualLogger()
 
 class TelemetryData:
     def __init__(self):
@@ -44,8 +86,9 @@ class TelemetryData:
                     self.update("boylam", n_boylam)
             if ham_rakim:
                 try:
-                    if float(ham_rakim) > 0:
-                        self.update("irtifa", float(ham_rakim))
+                    rakim = self.safe_float(ham_rakim)
+                    if rakim > 0:
+                        self.update("irtifa", rakim)
                 except Exception:
                     pass
 
@@ -54,21 +97,52 @@ class TelemetryData:
             try:
                 with self.lock:
                     self.data["zaman_damgasi"] = int(parcalar[1])
-                    self.data["ax"] = float(parcalar[2])
-                    self.data["ay"] = float(parcalar[3])
-                    self.data["az"] = float(parcalar[4])
-                    self.data["gx"] = float(parcalar[5])
-                    self.data["gy"] = float(parcalar[6])
-                    self.data["gz"] = float(parcalar[7])
-                    self.data["sicaklik"] = float(parcalar[8])
-                    self.data["roll"] = float(parcalar[9])  
-                    self.data["pitch"] = float(parcalar[10])
-                    self.data["yaw"] = float(parcalar[11]) 
-                    self.data["mx"] = float(parcalar[12])
-                    self.data["my"] = float(parcalar[13])
-                    self.data["mz"] = float(parcalar[14])
+                    self.data["ax"] = TelemetryData.safe_float(parcalar[2])
+                    self.data["ay"] = TelemetryData.safe_float(parcalar[3])
+                    self.data["az"] = TelemetryData.safe_float(parcalar[4])
+                    self.data["gx"] = TelemetryData.safe_float(parcalar[5])
+                    self.data["gy"] = TelemetryData.safe_float(parcalar[6])
+                    self.data["gz"] = TelemetryData.safe_float(parcalar[7])
+                    self.data["sicaklik"] = TelemetryData.safe_float(parcalar[8])
+                    self.data["roll"] = TelemetryData.safe_float(parcalar[9])  
+                    self.data["pitch"] = TelemetryData.safe_float(parcalar[10])
+                    self.data["yaw"] = TelemetryData.safe_float(parcalar[11]) 
+                    self.data["mx"] = TelemetryData.safe_float(parcalar[12])
+                    self.data["my"] = TelemetryData.safe_float(parcalar[13])
+                    self.data["mz"] = TelemetryData.safe_float(parcalar[14])
+                    
+                    if self.data["durum"] in ["SİNYAL KAYBI", "BAGLANTI KOPTU"]:
+                        self.data["durum"] = "NORMAL"
             except Exception as e:
                 print(f"Ayrıştırma Hatası: {e}")
+
+    def zero_out(self):
+        with self.lock:
+            # Durum ve zaman damgası hariç her şeyi 0'a çekiyoruz
+            self.data["irtifa"] = 0.0
+            self.data["hiz"] = 0.0
+            self.data["ax"] = 0.0
+            self.data["ay"] = 0.0
+            self.data["az"] = 0.0
+            self.data["gx"] = 0.0
+            self.data["gy"] = 0.0
+            self.data["gz"] = 0.0
+            self.data["roll"] = 0.0
+            self.data["pitch"] = 0.0
+            self.data["yaw"] = 0.0
+            self.data["mx"] = 0.0
+            self.data["my"] = 0.0
+            self.data["mz"] = 0.0
+
+    @staticmethod
+    def safe_float(val):
+        try:
+            val = val.strip().lower()
+            if val in ['ovf', 'nan', 'inf', '-inf']:
+                return 0.0
+            return float(val)
+        except:
+            return 0.0
 
     @staticmethod
     def nmea_to_decimal(nmea_str):
@@ -153,12 +227,14 @@ class SerialManager:
                         if (not ilk_veri_alindi and gecen_sure > 10.0) or (ilk_veri_alindi and gecen_sure > 2.0):
                             if self.telemetry.get_all()["durum"] != "SİNYAL KAYBI":
                                 self.telemetry.update("durum", "SİNYAL KAYBI")
+                                self.telemetry.zero_out() # Bayat veriyi sil
                                 print("\n[UYARI] Arduino'dan veri gelmiyor! (Sinyal Kaybı) Bekleniyor...")
                         time.sleep(0.005)
             except Exception as e:
                 print(f"\n[SİSTEM UYARISI] Windows Seri Port bağlantısını anlık olarak kesti (Hata: {e})")
                 print("[SİSTEM UYARISI] Çökme engellendi! 3 saniye içinde bağlantı yeniden kurulacak...\n")
                 self.telemetry.update("durum", "BAGLANTI KOPTU")
+                self.telemetry.zero_out() # Bayat veriyi sil
                 self.is_connected = False
                 time.sleep(3)
 

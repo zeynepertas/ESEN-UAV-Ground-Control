@@ -419,4 +419,8 @@ csvIndir() {
   gitGuney() { this.telemetriServisi.komutGonder('SOUTH'); }
   gitDogu() { this.telemetriServisi.komutGonder('EAST'); }
   gitBati() { this.telemetriServisi.komutGonder('WEST'); }
+
+  kalibreEt() {
+    this.telemetriServisi.komutGonder('CALIBRATE');
+  }
 }

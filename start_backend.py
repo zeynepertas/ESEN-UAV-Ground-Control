@@ -2,29 +2,44 @@ import subprocess
 import time
 import sys
 
-print("======================================================")
-print(" 🚀 ESEN UAV - BÜTÜNLEŞİK BACKEND BAŞLATICI (WRAPPER)")
-print("======================================================")
+class BackendLauncher:
+    def __init__(self):
+        self.flask_process = None
+        self.bridge_process = None
 
-try:
-    # 1. Flask API (app.py) dosyasını arka planda ayrı bir alt süreç (subprocess) olarak başlat
-    print("[1/2] Flask API (Veritabanı ve Sunucu) ayağa kaldırılıyor...")
-    flask_process = subprocess.Popen([sys.executable, "app.py"])
+    def print_banner(self):
+        print("======================================================")
+        print(" 🚀 ESEN UAV - BÜTÜNLEŞİK BACKEND BAŞLATICI (WRAPPER)")
+        print("======================================================")
 
-    # Sunucunun portu açması için 2 saniye bekle
-    time.sleep(2)
+    def start_services(self):
+        try:
+            print("[1/2] Flask API (Veritabanı ve Sunucu) ayağa kaldırılıyor...")
+            self.flask_process = subprocess.Popen([sys.executable, "app.py"])
 
-    # 2. ESP/Arduino Bridge (esp_bridge.py) dosyasını alt süreç olarak başlat
-    print("[2/2] Arduino Donanım Köprüsü (Telemetri) başlatılıyor...\n")
-    bridge_process = subprocess.Popen([sys.executable, "esp_bridge.py"])
+            # Sunucunun portu açması için 2 saniye bekle
+            time.sleep(2)
 
-    # Ana programı canlı tutarak alt süreçlerin (terminal çıktılarını) ekrana yansıtmasını sağla
-    flask_process.wait()
-    bridge_process.wait()
+            print("[2/2] Arduino Donanım Köprüsü (Telemetri) başlatılıyor...\n")
+            self.bridge_process = subprocess.Popen([sys.executable, "esp_bridge.py"])
 
-except KeyboardInterrupt:
-    # Kullanıcı terminalde Ctrl+C'ye bastığında yetim (zombi) process kalmaması için ikisini de güvenle kapat
-    print("\n[SİSTEM] Kapatma komutu (Ctrl+C) algılandı. Tüm servisler durduruluyor...")
-    flask_process.terminate()
-    bridge_process.terminate()
-    print("Sistem güvenle kapatıldı. İyi uçuşlar! ✈️")
+            # Ana programı canlı tutarak alt süreçlerin ekrana yansıtmasını sağla
+            self.flask_process.wait()
+            self.bridge_process.wait()
+
+        except KeyboardInterrupt:
+            self.stop_services()
+
+    def stop_services(self):
+        print("\n[SİSTEM] Kapatma komutu (Ctrl+C) algılandı. Tüm servisler durduruluyor...")
+        if self.flask_process:
+            self.flask_process.terminate()
+        if self.bridge_process:
+            self.bridge_process.terminate()
+        print("Sistem güvenle kapatıldı. İyi uçuşlar! ✈️")
+
+
+if __name__ == "__main__":
+    launcher = BackendLauncher()
+    launcher.print_banner()
+    launcher.start_services()
